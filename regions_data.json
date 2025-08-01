@@ -1,0 +1,114 @@
+[
+  {
+    "model": "subcontractors.region",
+    "pk": 1,
+    "fields": {
+      "name": "Nationwide"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 2,
+    "fields": {
+      "name": "South"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 4,
+    "fields": {
+      "name": "North East"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 5,
+    "fields": {
+      "name": "Southern"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 6,
+    "fields": {
+      "name": "London"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 7,
+    "fields": {
+      "name": "Midlands"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 8,
+    "fields": {
+      "name": "North West"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 9,
+    "fields": {
+      "name": "Cheshire"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 11,
+    "fields": {
+      "name": "Central London"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 12,
+    "fields": {
+      "name": "Scotland"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 13,
+    "fields": {
+      "name": "North"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 14,
+    "fields": {
+      "name": "London & South East"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 17,
+    "fields": {
+      "name": "Midlands/Yorkshire"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 18,
+    "fields": {
+      "name": "NorthWest"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 20,
+    "fields": {
+      "name": "Scotland/North England"
+    }
+  },
+  {
+    "model": "subcontractors.region",
+    "pk": 21,
+    "fields": {
+      "name": "Northern"
+    }
+  }
+]

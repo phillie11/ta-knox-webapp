@@ -1,0 +1,330 @@
+[
+  {
+    "model": "subcontractors.trade",
+    "pk": 1,
+    "fields": {
+      "name": "Builderswork",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 2,
+    "fields": {
+      "name": "BWIC",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 3,
+    "fields": {
+      "name": "Cladding",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 4,
+    "fields": {
+      "name": "Cleaning",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 5,
+    "fields": {
+      "name": "Civils Groundworks",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 6,
+    "fields": {
+      "name": "Decoration",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 7,
+    "fields": {
+      "name": "Demolition",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 8,
+    "fields": {
+      "name": "Electrical",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 9,
+    "fields": {
+      "name": "External Spraying",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 10,
+    "fields": {
+      "name": "Fire Security",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 11,
+    "fields": {
+      "name": "Firestopping",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 12,
+    "fields": {
+      "name": "Flooring",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 13,
+    "fields": {
+      "name": "Glass Partitions",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 14,
+    "fields": {
+      "name": "Hoarding",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 15,
+    "fields": {
+      "name": "Kitchen Extraction",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 16,
+    "fields": {
+      "name": "Lifts ",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 17,
+    "fields": {
+      "name": "Line Marking",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 18,
+    "fields": {
+      "name": "Magic Man",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 19,
+    "fields": {
+      "name": "Mechanical",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 20,
+    "fields": {
+      "name": "MEP",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 21,
+    "fields": {
+      "name": "Metalwork",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 22,
+    "fields": {
+      "name": "Mezzanine",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 23,
+    "fields": {
+      "name": "Partitions Ceilings",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 24,
+    "fields": {
+      "name": "Plastering Rendering",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 25,
+    "fields": {
+      "name": "Plumbing",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 26,
+    "fields": {
+      "name": "Resin Flooring",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 27,
+    "fields": {
+      "name": "Roofing",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 28,
+    "fields": {
+      "name": "Scaffolding",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 29,
+    "fields": {
+      "name": "Screeding",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 30,
+    "fields": {
+      "name": "Shopfronts",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 31,
+    "fields": {
+      "name": "Shutters",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 32,
+    "fields": {
+      "name": "Signage",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 33,
+    "fields": {
+      "name": "Sealants",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 34,
+    "fields": {
+      "name": "Spray Plaster",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 35,
+    "fields": {
+      "name": "Sprinklers",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 36,
+    "fields": {
+      "name": "Stonework",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 37,
+    "fields": {
+      "name": "Tarmac",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 38,
+    "fields": {
+      "name": "Tiling",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 39,
+    "fields": {
+      "name": "Whiteroc",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 40,
+    "fields": {
+      "name": "Wood Flooring",
+      "description": ""
+    }
+  },
+  {
+    "model": "subcontractors.trade",
+    "pk": 41,
+    "fields": {
+      "name": "RAF",
+      "description": "Raised Access Flooring"
+    }
+  }
+]

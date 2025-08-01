@@ -1,0 +1,125 @@
+{% extends 'base.html' %}
+{% load crispy_forms_tags %}
+
+{% block title %}
+  {% if object %}
+    Edit Subcontractor - {{ object.company }}
+  {% else %}
+    Add New Subcontractor
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>
+      {% if object %}
+        Edit Subcontractor
+      {% else %}
+        Add New Subcontractor
+      {% endif %}
+    </h1>
+    <a href="{% if object %}{% url 'subcontractors:detail' object.id %}{% else %}{% url 'subcontractors:list' %}{% endif %}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-left"></i> Back
+    </a>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <form method="post">
+        {% csrf_token %}
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.company|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.trade|as_crispy_field }}
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.head_office|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.pqq_status|as_crispy_field }}
+          </div>
+        </div>
+
+        <h5 class="mt-4 mb-3">Contact Information</h5>
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.first_name|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.surname|as_crispy_field }}
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.email|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.mobile|as_crispy_field }}
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.landline|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.website|as_crispy_field }}
+          </div>
+        </div>
+
+        <h5 class="mt-4 mb-3">Additional Information</h5>
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.subcontractor_score|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.insurance_expiry|as_crispy_field }}
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.meeting_booked|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            <div class="card">
+              <div class="card-header bg-primary">
+                <h6 class="mb-0">Regions</h6>
+              </div>
+              <div class="card-body">
+                {{ form.regions }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {{ form.notes|as_crispy_field }}
+
+        <div class="d-flex justify-content-between mt-4">
+          <a href="{% if object %}{% url 'subcontractors:detail' object.id %}{% else %}{% url 'subcontractors:list' %}{% endif %}" class="btn btn-secondary">
+            <i class="bi bi-x"></i> Cancel
+          </a>
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-save"></i>
+            {% if object %}
+              Save Changes
+            {% else %}
+              Add Subcontractor
+            {% endif %}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

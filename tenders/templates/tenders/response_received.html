@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tender Response Received</title>
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
+  <style>
+    body {
+      background-color: #f8f9fa;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .container {
+      max-width: 800px;
+    }
+    .logo-container {
+      text-align: center;
+      margin-bottom: 2rem;
+      padding-top: 2rem;
+    }
+    .card {
+      border-radius: 15px;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+      border: none;
+    }
+    .card-header {
+      padding: 1.5rem;
+      border-bottom: none;
+    }
+    .icon-circle {
+      position: absolute; 
+      top: 0; 
+      left: 50%; 
+      transform: translateX(-50%); 
+      width: 110px; 
+      height: 110px; 
+      background-color: rgba(40, 167, 69, 0.1); 
+      border-radius: 50%;
+    }
+    .icon-circle-danger {
+      background-color: rgba(220, 53, 69, 0.1);
+    }
+    .success-gradient {
+      border-radius: 10px;
+      background-image: linear-gradient(to right, #28a745, #20c997);
+      border: none;
+      color: white;
+      box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+    }
+    .danger-gradient {
+      border-radius: 10px;
+      background-image: linear-gradient(to right, #dc3545, #e83e8c);
+      border: none;
+      color: white;
+      box-shadow: 0 4px 15px rgba(220, 53, 69, 0.3);
+    }
+    .info-border {
+      border-radius: 10px;
+      border-left: 5px solid #0dcaf0;
+    }
+    .close-btn {
+      border-radius: 20px;
+      transition: all 0.3s ease;
+    }
+    .close-btn:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+    }
+    .footer {
+      text-align: center;
+      padding: 2rem 0;
+      color: #6c757d;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="logo-container">
+    <img src="https://www.taknox.co.uk/wp-content/uploads/2020/09/taknox-logo.png" alt="TA Knox Logo" height="60">
+  </div>
+
+  <div class="container mt-3 mb-5">
+    <div class="card shadow-lg border-0">
+      <div class="card-header {% if response == 'yes' %}bg-success{% else %}bg-danger{% endif %} text-white">
+        <h4 class="mb-0">Thank You for Your Response</h4>
+      </div>
+      <div class="card-body p-5">
+        <div class="text-center mb-5">
+          {% if response == 'yes' %}
+            <div class="display-1 text-success mb-4" style="position: relative;">
+              <div class="icon-circle"></div>
+              <i class="bi bi-check-circle-fill" style="position: relative; z-index: 1;"></i>
+            </div>
+            <h2 class="mb-3">Your response has been recorded</h2>
+            <div class="alert success-gradient">
+              <p class="lead mb-0"><strong>You have confirmed that you WILL tender for this project.</strong></p>
+            </div>
+            <p class="mt-4">Thank you for confirming that you will tender for this project.</p>
+          {% else %}
+            <div class="display-1 text-danger mb-4" style="position: relative;">
+              <div class="icon-circle icon-circle-danger"></div>
+              <i class="bi bi-x-circle-fill" style="position: relative; z-index: 1;"></i>
+            </div>
+            <h2 class="mb-3">Your response has been recorded</h2>
+            <div class="alert danger-gradient">
+              <p class="lead mb-0"><strong>You have confirmed that you WILL NOT tender for this project.</strong></p>
+            </div>
+            <p class="mt-4">Thank you for letting us know that you will not be tendering for this project.</p>
+          {% endif %}
+        </div>
+        
+        <div class="card mb-4 shadow-sm" style="border-radius: 10px; border: none;">
+          <div class="card-body">
+            <h5 class="card-title">Project Details</h5>
+            <div class="row mt-3">
+              <div class="col-md-6">
+                <p class="card-text"><i class="bi bi-briefcase me-2 text-primary"></i> <strong>Project:</strong> {{ project.name }}</p>
+                <p class="card-text"><i class="bi bi-geo-alt me-2 text-primary"></i> <strong>Location:</strong> {{ project.location }}</p>
+              </div>
+              <div class="col-md-6">
+                {% if project.sc_deadline %}
+                  <p class="card-text"><i class="bi bi-calendar-event me-2 text-primary"></i> <strong>Your Deadline:</strong> {{ project.sc_deadline|date:"d/m/Y" }}</p>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {% if response == 'yes' %}
+          <div class="alert alert-info info-border">
+            <div class="d-flex">
+              <div class="me-3">
+                <i class="bi bi-info-circle-fill text-info" style="font-size: 24px;"></i>
+              </div>
+              <div>
+                <h5 class="alert-heading">Next Steps</h5>
+                <p class="mb-0">Please ensure your tender submission is received before the deadline. If you have any questions, don't hesitate to contact us.</p>
+              </div>
+            </div>
+          </div>
+        {% endif %}
+
+        <div class="text-center mt-5">
+          <p>You may now close this window.</p>
+          <button onclick="window.close()" class="btn btn-outline-secondary mt-2 close-btn">
+            <i class="bi bi-x-circle me-2"></i> Close Window
+          </button>
+        </div>
+
+        <!-- Added a reference number for confirmation -->
+        <div class="text-center mt-4">
+          <p class="text-muted small">Response reference: {{ invitation.id }}-{{ response }}-{{ invitation.response_date|date:"YmdHis" }}</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="footer">
+    <p>&copy; <span id="currentYear"></span> TA Knox Ltd. All rights reserved.</p>
+    <p class="small">This is a secure response page for tender invitations.</p>
+  </div>
+  
+  <script>
+    // No connection to your CRM system is being made from this page
+    // This is an isolated, standalone confirmation page
+    
+    // Set current year in footer
+    document.addEventListener('DOMContentLoaded', function() {
+      document.getElementById('currentYear').innerText = new Date().getFullYear();
+    });
+  </script>
+</body>
+</html>

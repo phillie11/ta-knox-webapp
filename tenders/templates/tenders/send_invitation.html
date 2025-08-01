@@ -1,0 +1,305 @@
+{% extends 'base.html' %}
+{% load crispy_forms_tags %}
+{% load static %}
+{% block title %}Send Tender Invitation{% endblock %}
+
+{% block extra_css %}
+<link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
+<style>
+  /* Make the subcontractor list properly sized */
+  .subcontractor-container {
+    height: 500px;
+    overflow-y: auto;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    margin-top: 10px;
+  }
+
+  /* Style for each subcontractor item - more padding on the left */
+  .form-check {
+    padding: 12px 10px 12px 40px; /* Increased left padding to make space for checkbox */
+    margin-bottom: 5px;
+    border-bottom: 1px solid #eee;
+    margin-left: 15px;
+    position: relative;
+  }
+
+  /* Position the checkbox properly */
+  .form-check-input {
+    position: absolute;
+    left: 15px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  /* Company name style */
+  .company-name {
+    font-weight: 500;
+    font-size: 1em;
+    margin-bottom: 3px;
+    display: block;
+    margin-left: 0px;
+  }
+
+  /* Head office style */
+  .head-office {
+    color: #6c757d;
+    font-size: 0.85em;
+    display: block;
+    margin-bottom: 3px;
+    margin-left: 0px;
+  }
+
+  /* Badge positioning */
+  .subcontractor-badge {
+    position: absolute;
+    right: 15px;
+    top: calc(50% + 10px);
+    transform: translateY(-50%);
+  }
+
+  /* Filter section */
+  .filter-section {
+    margin-bottom: 15px;
+    padding: 12px;
+    border-radius: 4px;
+  }
+
+  #editor-container {
+    height: 300px;
+  }
+
+  .ql-editor {
+    min-height: 200px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+  <h1>Send Tender Invitation</h1>
+  <h4>Project: {{ project.name }}</h4>
+
+  <div class="card mt-4">
+    <div class="card-body">
+      <form method="post" class="email-send-form">
+        {% csrf_token %}
+
+        <div class="row">
+          <div class="col-md-7">
+            <div class="row">
+              <div class="col-md-6">
+                {{ form.subject|as_crispy_field }}
+              </div>
+              <div class="col-md-6">
+                {{ form.sharepoint_link|as_crispy_field }}
+              </div>
+            </div>
+
+            <div class="form-group mb-3">
+              <label for="editor-container">Message*</label>
+              <div id="editor-container"></div>
+              <textarea name="message" id="id_message" style="display:none;">{{ form.message.value|default:form.message.initial }}</textarea>
+            </div>
+          </div>
+
+          <div class="col-md-5">
+            <div class="card">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Select Subcontractors</h5>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="selectAllBtn">
+                  Select All Visible
+                </button>
+              </div>
+              <div class="card-body">
+                <!-- Filters -->
+                <div class="filter-section">
+                  <div class="row">
+                    <div class="col-md-6">
+                      <label for="tradeFilter" class="form-label">Filter by Trade:</label>
+                      <select id="tradeFilter" class="form-select">
+                        <option value="">All Trades</option>
+                        {% for trade in trades %}
+                          <option value="{{ trade.name }}">{{ trade.name }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+                    <div class="col-md-6">
+                      <label for="searchInput" class="form-label">Search:</label>
+                      <input type="text" id="searchInput" class="form-control" placeholder="Search subcontractors...">
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Status indicator -->
+                <div class="d-flex justify-content-between mb-2">
+                  <span id="countDisplay">Showing all subcontractors</span>
+                  <a href="#" id="clearFiltersBtn">Clear filters</a>
+                </div>
+
+                <!-- Original form elements (for form submission) -->
+                <div style="display: none;">
+                  {{ form.subcontractors }}
+                </div>
+
+                <!-- Subcontractor list container (visible to user) -->
+                <div class="subcontractor-container">
+                  <!-- We'll display the subcontractors directly here -->
+                  {% for subcontractor in form.subcontractors.field.queryset %}
+                  <div class="form-check" data-trade="{{ subcontractor.trade.name|lower }}" data-company="{{ subcontractor.company|lower }}" data-head-office="{{ subcontractor.head_office|lower }}">
+                    <input type="checkbox" class="form-check-input" id="sub_{{ subcontractor.id }}" name="display_subcontractors" value="{{ subcontractor.id }}">
+                    <label class="form-check-label" for="sub_{{ subcontractor.id }}">
+                      <div class="company-name">{{ subcontractor.company }}</div>
+                      <div class="head-office">{{ subcontractor.head_office }}</div>
+                      <span class="badge bg-secondary subcontractor-badge">{{ subcontractor.trade.name }}</span>
+                    </label>
+                  </div>
+                  {% endfor %}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <button type="submit" class="btn btn-primary">Send Invitations</button>
+          <a href="{% url 'projects:detail' project.id %}" class="btn btn-secondary">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  // Quill editor initialization
+  var quill = new Quill('#editor-container', {
+    modules: {
+      toolbar: [
+        ['bold', 'italic', 'underline', 'strike'],
+        ['blockquote', 'code-block'],
+        [{ 'header': 1 }, { 'header': 2 }],
+        [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+        [{ 'color': [] }, { 'background': [] }],
+        [{ 'align': [] }],
+        ['clean']
+      ]
+    },
+    placeholder: 'Compose your message...',
+    theme: 'snow'
+  });
+
+  // Set initial content
+  quill.root.innerHTML = document.getElementById('id_message').value;
+
+  // Update hidden form field before submit
+  document.querySelector('form').addEventListener('submit', function() {
+    document.getElementById('id_message').value = quill.root.innerHTML;
+  });
+
+  // Get UI elements
+  const tradeFilter = document.getElementById('tradeFilter');
+  const searchInput = document.getElementById('searchInput');
+  const clearFiltersBtn = document.getElementById('clearFiltersBtn');
+  const selectAllBtn = document.getElementById('selectAllBtn');
+  const countDisplay = document.getElementById('countDisplay');
+
+  // Get all subcontractor items
+  const subcontractorItems = document.querySelectorAll('.form-check');
+
+  // Get all display checkboxes
+  const displayCheckboxes = document.querySelectorAll('input[name="display_subcontractors"]');
+
+  // Get all form checkboxes (original ones that will be submitted)
+  const formCheckboxes = document.querySelectorAll('input[name="subcontractors"]');
+
+  // Sync the display checkboxes to the form checkboxes
+  function syncCheckboxesToForm() {
+      displayCheckboxes.forEach(displayCheckbox => {
+          const value = displayCheckbox.value;
+          const formCheckbox = document.querySelector(`input[name="subcontractors"][value="${value}"]`);
+
+          if (formCheckbox) {
+              formCheckbox.checked = displayCheckbox.checked;
+          }
+      });
+  }
+
+  // Add event listeners to display checkboxes
+  displayCheckboxes.forEach(checkbox => {
+      checkbox.addEventListener('change', syncCheckboxesToForm);
+  });
+
+  // Function to filter the list
+  function filterList() {
+      const selectedTrade = tradeFilter.value.toLowerCase();
+      const searchText = searchInput.value.toLowerCase();
+
+      let visibleCount = 0;
+      const totalCount = subcontractorItems.length;
+
+      subcontractorItems.forEach(item => {
+          const trade = item.getAttribute('data-trade') || '';
+          const company = item.getAttribute('data-company') || '';
+          const headOffice = item.getAttribute('data-head-office') || '';
+
+          // Check if it passes all filters
+          const matchesTrade = !selectedTrade || trade.includes(selectedTrade);
+          const matchesSearch = !searchText ||
+                                company.includes(searchText) ||
+                                trade.includes(searchText) ||
+                                headOffice.includes(searchText);
+
+          // Show or hide based on filter results
+          if (matchesTrade && matchesSearch) {
+              item.style.display = '';
+              visibleCount++;
+          } else {
+              item.style.display = 'none';
+          }
+      });
+
+      // Update count display
+      countDisplay.textContent = `Showing ${visibleCount} of ${totalCount} subcontractors`;
+  }
+
+  // Initialize count display
+  countDisplay.textContent = `Showing ${subcontractorItems.length} of ${subcontractorItems.length} subcontractors`;
+
+  // Add event listeners for filters
+  if (tradeFilter) {
+      tradeFilter.addEventListener('change', filterList);
+  }
+
+  if (searchInput) {
+      searchInput.addEventListener('input', filterList);
+  }
+
+  // Clear filters button
+  if (clearFiltersBtn) {
+      clearFiltersBtn.addEventListener('click', function(e) {
+          e.preventDefault();
+          tradeFilter.value = '';
+          searchInput.value = '';
+          filterList();
+      });
+  }
+
+  // Select all visible button
+  if (selectAllBtn) {
+      selectAllBtn.addEventListener('click', function() {
+          const visibleCheckboxes = document.querySelectorAll('.form-check:not([style*="display: none"]) input[type="checkbox"]');
+          visibleCheckboxes.forEach(checkbox => {
+              checkbox.checked = true;
+          });
+
+          // Sync to form checkboxes
+          syncCheckboxesToForm();
+      });
+  }
+});
+</script>
+{% endblock %}

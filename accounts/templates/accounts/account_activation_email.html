@@ -1,0 +1,12 @@
+{% autoescape off %}
+Hi {{ user.username }},
+
+Please click on the link below to confirm your registration for the CRM System:
+
+http://{{ domain }}{% url 'accounts:activate' uidb64=uid token=token %}
+
+If you didn't register for this account, you can safely ignore this email.
+
+Best regards,
+The CRM System Team
+{% endautoescape %}

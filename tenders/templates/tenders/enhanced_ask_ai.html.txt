@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Ask AI - {{ project.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        .chat-container {
+            height: 600px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 1rem;
+            background-color: #f8f9fa;
+        }
+        .message {
+            margin-bottom: 1rem;
+            padding: 1rem;
+            border-radius: 8px;
+            max-width: 85%;
+        }
+        .message.user {
+            background-color: #007bff;
+            color: white;
+            margin-left: auto;
+        }
+        .message.ai {
+            background-color: white;
+            border: 1px solid #dee2e6;
+            margin-right: auto;
+        }
+        .confidence-bar {
+            height: 4px;
+            background-color: #e9ecef;
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 0.5rem;
+        }
+        .confidence-fill {
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        .document-category {
+            background-color: #e9ecef;
+            padding: 0.5rem;
+            border-radius: 4px;
+            margin: 0.25rem;
+            display: inline-block;
+            font-size: 0.875rem;
+        }
+        .document-analysis {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        .file-analysis {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        .key-finding {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            border-radius: 4px;
+            padding: 0.5rem;
+            margin: 0.25rem 0;
+        }
+        .document-reference {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 0.5rem;
+            margin: 0.25rem 0;
+        }
+        .cross-reference {
+            background-color: #e2e3e5;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            padding: 0.5rem;
+            margin: 0.25rem 0;
+        }
+        .suggestion-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+        .suggestion-btn {
+            background-color: #e9ecef;
+            border: 1px solid #ced4da;
+            border-radius: 20px;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: all 0.3s ease;
+        }
+        .suggestion-btn:hover {
+            background-color: #007bff;
+            color: white;
+        }
+        .loading-spinner {
+            display: none;
+            text-align: center;
+            padding: 1rem;
+        }
+        .analysis-type {
+            font-size: 0.75rem;
+            color: #6c757d;
+            margin-top: 0.25rem;
+        }
+        .folder-structure {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 0.5rem;
+            margin: 0.25rem 0;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .stat-card {
+            background-color: white;
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .recent-questions {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .question-item {
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 4px;
+            margin: 0.25rem 0;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+        }
+        .question-item:hover {
+            background-color: #e9ecef;
+        }
+        
+        /* Progress Overlay Styles */
+        .progress-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            z-index: 9999;
+            display: none;
+            justify-content: center;
+            align-items: center;
+        }
+        .progress-modal {
+            background-color: white;
+            border-radius: 12px;
+            padding: 2rem;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        .progress-bar-container {
+            background-color: #e9ecef;
+            border-radius: 10px;
+            height: 20px;
+            margin: 1rem 0;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #007bff, #0056b3);
+            border-radius: 10px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+        .current-file-info {
+            background-color: #f8f9fa;
+            border-radius: 6px;
+            padding: 0.75rem;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+        }
+        .format-breakdown {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+        .format-item {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 0.5rem;
+            text-align: center;
+            font-size: 0.85rem;
+        }
+        .format-readable {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .format-unreadable {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        .analyzing {
+            animation: pulse 2s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- Header -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h1><i class="bi bi-robot"></i> Enhanced Ask AI - {{ project.name }}</h1>
+                    <div>
+                        <button class="btn btn-outline-info" onclick="runFileAnalysis()">
+                            <i class="bi bi-file-earmark-text"></i> Analyze Files
+                        </button>
+                        <button class="btn btn-outline-secondary" onclick="clearDocumentCache()">
+                            <i class="bi bi-arrow-clockwise"></i> Refresh Documents
+                        </button>
+                        <a href="{% url 'projects:detail' project.id %}" class="btn btn-outline-primary">
+                            <i class="bi bi-arrow-left"></i> Back to Project
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Main Chat Area -->
+            <div class="col-md-8">
+                <!-- File Format Analysis -->
+                <div class="file-analysis" id="fileAnalysisSection" style="display: none;">
+                    <h5><i class="bi bi-file-earmark-bar-graph"></i> File Format Analysis</h5>
+                    <div class="row" id="fileStatsGrid">
+                        <!-- File stats will be populated here -->
+                    </div>
+                    <div class="format-breakdown" id="formatBreakdown">
+                        <!-- Format breakdown will be populated here -->
+                    </div>
+                </div>
+
+                <!-- Document Analysis Overview -->
+                {% if document_analysis %}
+                <div class="document-analysis">
+                    <h5><i class="bi bi-folder-open"></i> Document Analysis Overview</h5>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <h4>{{ document_analysis.total_documents }}</h4>
+                            <small class="text-muted">Total Documents</small>
+                        </div>
+                        <div class="stat-card">
+                            <h4>{{ document_analysis.document_categories|length }}</h4>
+                            <small class="text-muted">Document Categories</small>
+                        </div>
+                        <div class="stat-card">
+                            <h4>{{ document_analysis.processing_summary.successful }}</h4>
+                            <small class="text-muted">Successfully Processed</small>
+                        </div>
+                        <div class="stat-card">
+                            <h4>{{ document_analysis.processing_summary.total_size|filesizeformat }}</h4>
+                            <small class="text-muted">Total Content</small>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <strong>Document Categories:</strong>
+                        {% for category, docs in document_analysis.document_categories.items %}
+                            <span class="document-category">{{ category }} ({{ docs|length }})</span>
+                        {% endfor %}
+                    </div>
+                    
+                    <div class="mb-3">
+                        <strong>Folder Structure:</strong>
+                        {% for folder, docs in document_analysis.folder_structure.items %}
+                            <div class="folder-structure">
+                                <strong>{{ folder }}:</strong> {{ docs|length }} document{{ docs|length|pluralize }}
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Chat Container -->
+                <div class="chat-container" id="chatContainer">
+                    <!-- Conversation History -->
+                    {% for qa in conversation_history %}
+                    <div class="message user">
+                        <strong>You:</strong> {{ qa.question_text }}
+                        <div class="text-muted small">{{ qa.created_date|date:"M d, Y H:i" }}</div>
+                    </div>
+                    <div class="message ai">
+                        <strong>AI Assistant:</strong> {{ qa.answer_text|linebreaks }}
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width: {{ qa.confidence_score }}%; background-color: {% if qa.confidence_score >= 80 %}#28a745{% elif qa.confidence_score >= 60 %}#ffc107{% else %}#dc3545{% endif %};"></div>
+                        </div>
+                        <div class="analysis-type">Confidence: {{ qa.confidence_score }}%</div>
+                    </div>
+                    {% empty %}
+                    <div class="text-center text-muted">
+                        <i class="bi bi-chat-dots display-4"></i>
+                        <p>Start a conversation by asking a question about your project documents.</p>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <!-- Loading Spinner -->
+                <div class="loading-spinner" id="loadingSpinner">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Analyzing documents...</span>
+                    </div>
+                    <p class="mt-2">Analyzing entire document suite...</p>
+                </div>
+
+                <!-- Question Input -->
+                <div class="row mt-3">
+                    <div class="col-12">
+                        <div class="input-group">
+                            <textarea 
+                                class="form-control" 
+                                id="questionInput" 
+                                placeholder="Ask a detailed question about your project documents..."
+                                rows="3"
+                                onkeypress="handleKeyPress(event)"></textarea>
+                            <button class="btn btn-primary" onclick="askQuestion()">
+                                <i class="bi bi-send"></i> Ask AI
+                            </button>
+                        </div>
+                        <div class="row mt-2">
+                            <div class="col-md-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="forceRefresh">
+                                    <label class="form-check-label" for="forceRefresh">
+                                        Force refresh document analysis
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="includeFileAnalysis" checked>
+                                    <label class="form-check-label" for="includeFileAnalysis">
+                                        Include file format analysis
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sidebar -->
+            <div class="col-md-4">
+                <!-- Quick Questions -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h6><i class="bi bi-lightbulb"></i> Suggested Questions</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="suggestion-buttons">
+                            <div class="suggestion-btn" onclick="setQuestion('What is the total project value and budget breakdown?')">
+                                Project Value & Budget
+                            </div>
+                            <div class="suggestion-btn" onclick="setQuestion('What are the key project dates and milestones?')">
+                                Timeline & Milestones
+                            </div>
+                            <div class="suggestion-btn" onclick="setQuestion('What are the main risks identified in the project?')">
+                                Risk Assessment
+                            </div>
+                            <div class="suggestion-btn" onclick="setQuestion('What trades and subcontractors are required?')">
+                                Required Trades
+                            </div>
+                            <div class="suggestion-btn" onclick="setQuestion('What are the technical specifications and standards?')">
+                                Technical Specs
+                            </div>
+                            <div class="suggestion-btn" onclick="setQuestion('What are the health and safety requirements?')">
+                                Health & Safety
+                            </div>
+                            <div class="suggestion-btn" onclick="setQuestion('What planning permissions and consents are needed?')">
+                                Planning & Consents
+                            </div>
+                            <div class="suggestion-btn" onclick="setQuestion('What environmental considerations apply?')">
+                                Environmental
+                            </div>
+                            <div class="suggestion-btn" onclick="setQuestion('What are the contract terms and conditions?')">
+                                Contract Terms
+                            </div>
+                            <div class="suggestion-btn" onclick="setQuestion('What exclusions and limitations are specified?')">
+                                Exclusions
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Questions -->
+                {% if conversation_history %}
+                <div class="card">
+                    <div class="card-header">
+                        <h6><i class="bi bi-clock-history"></i> Recent Questions</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="recent-questions">
+                            {% for qa in conversation_history|slice:":10" %}
+                            <div class="question-item" onclick="setQuestion('{{ qa.question_text|escapejs }}')">
+                                <div class="fw-bold">{{ qa.question_text|truncatewords:10 }}</div>
+                                <div class="text-muted small">{{ qa.created_date|date:"M d, H:i" }} - {{ qa.confidence_score }}% confidence</div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Progress Overlay -->
+    <div class="progress-overlay" id="progressOverlay">
+        <div class="progress-modal">
+            <div class="text-center">
+                <h4 id="progressTitle">
+                    <i class="bi bi-hourglass-split analyzing"></i> 
+                    Analyzing SharePoint Documents
+                </h4>
+                <p id="progressMessage" class="text-muted">Initializing analysis...</p>
+            </div>
+            
+            <div class="progress-bar-container">
+                <div class="progress-bar-fill" id="progressBarFill"></div>
+            </div>
+            
+            <div class="text-center">
+                <span id="progressPercent">0%</span>
+            </div>
+            
+            <div class="current-file-info" id="currentFileInfo" style="display: none;">
+                <div class="row">
+                    <div class="col-md-6">
+                        <strong>Current File:</strong><br>
+                        <span id="currentFileName">-</span>
+                    </div>
+                    <div class="col-md-6">
+                        <strong>Current Folder:</strong><br>
+                        <span id="currentFolder">-</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mt-3 text-center">
+                <button class="btn btn-outline-secondary btn-sm" onclick="hideProgressOverlay()" id="cancelBtn">
+                    <i class="bi bi-x"></i> Hide Progress
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let isProcessing = false;
+        let analysisProgressInterval = null;
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                askQuestion();
+            }
+        }
+
+        function setQuestion(question) {
+            document.getElementById('questionInput').value = question;
+            document.getElementById('questionInput').focus();
+        }
+
+        async function askQuestion() {
+            if (isProcessing) return;
+
+            const questionInput = document.getElementById('questionInput');
+            const question = questionInput.value.trim();
+            
+            if (!question) {
+                alert('Please enter a question');
+                return;
+            }
+
+            isProcessing = true;
+            
+            // Show loading
+            document.getElementById('loadingSpinner').style.display = 'block';
+            
+            // Add user message to chat
+            addMessageToChat('user', question);
+            
+            // Clear input
+            questionInput.value = '';
+
+            try {
+                const response = await fetch('{% url "tenders:enhanced_ask_ai_with_analysis" project.id %}', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    },
+                    body: JSON.stringify({
+                        question: question,
+                        force_refresh: document.getElementById('forceRefresh').checked,
+                        include_file_analysis: document.getElementById('includeFileAnalysis').checked
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Add AI response to chat
+                    addAIResponseToChat(data);
+                    
+                    // Show file analysis if included
+                    if (data.file_analysis) {
+                        displayFileAnalysis(data.file_analysis);
+                    }
+                } else {
+                    addMessageToChat('ai', `Error: ${data.error}`);
+                }
+
+            } catch (error) {
+                console.error('Error:', error);
+                addMessageToChat('ai', 'Sorry, I encountered an error while processing your question.');
+            } finally {
+                isProcessing = false;
+                document.getElementById('loadingSpinner').style.display = 'none';
+            }
+        }
+
+        function addMessageToChat(sender, message) {
+            const chatContainer = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}`;
+            
+            const timestamp = new Date().toLocaleString();
+            
+            if (sender === 'user') {
+                messageDiv.innerHTML = `
+                    <strong>You:</strong> ${message}
+                    <div class="text-muted small">${timestamp}</div>
+                `;
+            } else {
+                messageDiv.innerHTML = `
+                    <strong>AI Assistant:</strong> ${message}
+                    <div class="text-muted small">${timestamp}</div>
+                `;
+            }
+            
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function addAIResponseToChat(data) {
+            const chatContainer = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message ai';
+            
+            let html = `<strong>AI Assistant:</strong> ${data.answer.replace(/\n/g, '<br>')}`;
+            
+            // Add confidence bar
+            const confidenceColor = data.confidence >= 80 ? '#28a745' : data.confidence >= 60 ? '#ffc107' : '#dc3545';
+            html += `
+                <div class="confidence-bar">
+                    <div class="confidence-fill" style="width: ${data.confidence}%; background-color: ${confidenceColor};"></div>
+                </div>
+                <div class="analysis-type">Confidence: ${data.confidence}% | Analysis: ${data.analysis_type}</div>
+            `;
+            
+            // Add file analysis summary if available
+            if (data.file_analysis) {
+                html += `
+                    <div class="mt-2">
+                        <strong>File Analysis Summary:</strong>
+                        <div class="small text-muted">
+                            Total files: ${data.file_analysis.overview.total_files} | 
+                            Readable: ${data.file_analysis.overview.readable_files} (${data.file_analysis.overview.readable_percentage}%)
+                        </div>
+                    </div>
+                `;
+            }
+            
+            const timestamp = new Date().toLocaleString();
+            html += `<div class="text-muted small">${timestamp}</div>`;
+            
+            messageDiv.innerHTML = html;
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function runFileAnalysis() {
+            showProgressOverlay('File Format Analysis', 'Starting file format analysis...');
+            
+            fetch('{% url "tenders:start_file_analysis" project.id %}', {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    startProgressTracking('file_analysis');
+                } else {
+                    hideProgressOverlay();
+                    alert('Error starting file analysis: ' + data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                hideProgressOverlay();
+                alert('Error starting file analysis');
+            });
+        }
+
+        function showProgressOverlay(title, message) {
+            document.getElementById('progressTitle').innerHTML = `<i class="bi bi-hourglass-split analyzing"></i> ${title}`;
+            document.getElementById('progressMessage').textContent = message;
+            document.getElementById('progressPercent').textContent = '0%';
+            document.getElementById('progressBarFill').style.width = '0%';
+            document.getElementById('currentFileInfo').style.display = 'none';
+            document.getElementById('progressOverlay').style.display = 'flex';
+        }
+
+        function hideProgressOverlay() {
+            document.getElementById('progressOverlay').style.display = 'none';
+            if (analysisProgressInterval) {
+                clearInterval(analysisProgressInterval);
+                analysisProgressInterval = null;
+            }
+        }
+
+        function startProgressTracking(analysisType) {
+            analysisProgressInterval = setInterval(() => {
+                fetch(`{% url "tenders:analysis_progress" project.id %}?type=${analysisType}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        updateProgress(data.progress);
+                        
+                        if (data.progress.stage === 'COMPLETE') {
+                            clearInterval(analysisProgressInterval);
+                            setTimeout(() => {
+                                hideProgressOverlay();
+                                loadFileAnalysisResults();
+                            }, 1000);
+                        } else if (data.progress.stage === 'ERROR') {
+                            clearInterval(analysisProgressInterval);
+                            setTimeout(() => {
+                                hideProgressOverlay();
+                                alert('Analysis failed: ' + data.progress.error);
+                            }, 1000);
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Progress tracking error:', error);
+                });
+            }, 1000);
+        }
+
+        function updateProgress(progress) {
+            document.getElementById('progressMessage').textContent = progress.message;
+            document.getElementById('progressPercent').textContent = progress.progress + '%';
+            document.getElementById('progressBarFill').style.width = progress.progress + '%';
+            
+            if (progress.current_file && progress.current_folder) {
+                document.getElementById('currentFileName').textContent = progress.current_file;
+                document.getElementById('currentFolder').textContent = progress.current_folder;
+                document.getElementById('currentFileInfo').style.display = 'block';
+            }
+        }
+
+        function loadFileAnalysisResults() {
+            fetch('{% url "tenders:file_analysis_results" project.id %}')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displayFileAnalysis(data.results.summary);
+                }
+            })
+            .catch(error => {
+                console.error('Error loading results:', error);
+            });
+        }
+
+        function displayFileAnalysis(summary) {
+            const fileAnalysisSection = document.getElementById('fileAnalysisSection');
+            const fileStatsGrid = document.getElementById('fileStatsGrid');
+            const formatBreakdown = document.getElementById('formatBreakdown');
+            
+            // Update stats grid
+            fileStatsGrid.innerHTML = `
+                <div class="col-md-3">
+                    <div class="stat-card">
+                        <h4>${summary.overview.total_files}</h4>
+                        <small class="text-muted">Total Files</small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="stat-card">
+                        <h4>${summary.overview.readable_files}</h4>
+                        <small class="text-muted">Readable Files</small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="stat-card">
+                        <h4>${summary.overview.readable_percentage}%</h4>
+                        <small class="text-muted">Readable Rate</small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="stat-card">
+                        <h4>${summary.overview.total_size}</h4>
+                        <small class="text-muted">Total Size</small>
+                    </div>
+                </div>
+            `;
+            
+            // Update format breakdown
+            formatBreakdown.innerHTML = '';
+            Object.entries(summary.format_distribution || {}).forEach(([format, data]) => {
+                const isReadable = ['PDF', 'WORD', 'EXCEL', 'TEXT', 'POWERPOINT'].includes(format);
+                const formatDiv = document.createElement('div');
+                formatDiv.className = `format-item ${isReadable ? 'format-readable' : 'format-unreadable'}`;
+                formatDiv.innerHTML = `
+                    <strong>${format}</strong><br>
+                    ${data.count} files (${data.percentage}%)<br>
+                    <small>${data.total_size}</small>
+                `;
+                formatBreakdown.appendChild(formatDiv);
+            });
+            
+            // Show recommendations if any
+            if (summary.recommendations && summary.recommendations.length > 0) {
+                const recommendationsDiv = document.createElement('div');
+                recommendationsDiv.className = 'mt-3';
+                recommendationsDiv.innerHTML = `
+                    <strong>Recommendations:</strong>
+                    <ul class="small mt-1 mb-0">
+                        ${summary.recommendations.map(rec => `<li>${rec}</li>`).join('')}
+                    </ul>
+                `;
+                formatBreakdown.appendChild(recommendationsDiv);
+            }
+            
+            fileAnalysisSection.style.display = 'block';
+        }
+
+        async function clearDocumentCache() {
+            try {
+                const response = await fetch('{% url "tenders:clear_document_cache" project.id %}', {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    }
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    alert('Document cache cleared successfully. Next question will use fresh document analysis.');
+                } else {
+                    alert('Error clearing cache: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error clearing cache');
+            }
+        }
+
+        // Auto-focus on question input
+        document.getElementById('questionInput').focus();
+
+        // Load file analysis results on page load if available
+        document.addEventListener('DOMContentLoaded', function() {
+            loadFileAnalysisResults();
+        });
+    </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+

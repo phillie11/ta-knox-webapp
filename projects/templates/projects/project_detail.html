@@ -1,0 +1,1880 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load tender_filters %}
+
+{% block title %}{{ project.name }} - CRM System{% endblock %}
+<style>
+.scanning-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.8);
+  z-index: 9999;
+  backdrop-filter: blur(5px);
+}
+
+.scanning-content {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: white;
+  padding: 40px;
+  border-radius: 15px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  text-align: center;
+  max-width: 500px;
+  width: 90%;
+}
+
+.scanning-animation {
+  width: 80px;
+  height: 80px;
+  margin: 0 auto 20px;
+  position: relative;
+}
+
+.scanning-spinner {
+  width: 100%;
+  height: 100%;
+  border: 4px solid #e3f2fd;
+  border-top: 4px solid #2196f3;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.scanning-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 24px;
+  color: #2196f3;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.progress-steps {
+  margin: 20px 0;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  margin: 10px 0;
+  opacity: 0.5;
+  transition: opacity 0.3s ease;
+}
+
+.step.active {
+  opacity: 1;
+  color: #2196f3;
+}
+
+.step.completed {
+  opacity: 1;
+  color: #4caf50;
+}
+
+.step-icon {
+  margin-right: 10px;
+  width: 20px;
+}
+
+.folder-option {
+  padding: 8px 16px;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.folder-option:last-child {
+  border-bottom: none;
+}
+
+.folder-option:hover {
+  background-color: #f8f9fa;
+}
+
+.folder-depth-0 { padding-left: 16px; }
+.folder-depth-1 { padding-left: 32px; }
+.folder-depth-2 { padding-left: 48px; }
+.folder-depth-3 { padding-left: 64px; }
+.folder-depth-4 { padding-left: 80px; }
+
+.folder-icon {
+  color: #ffc107;
+  margin-right: 8px;
+  width: 16px;
+}
+
+.depth-indicator {
+  display: inline-block;
+  background: #e9ecef;
+  color: #6c757d;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  margin-left: 8px;
+}
+
+/* Fix dropdown styling */
+#sharepoint-folder-select {
+  background-color: white !important;
+  color: black !important;
+}
+
+#sharepoint-folder-select option {
+  background-color: white !important;
+  color: black !important;
+  padding: 4px 8px !important;
+}
+
+#sharepoint-folder-select option.main-project {
+  font-weight: bold !important;
+  background-color: #e3f2fd !important;
+  color: #1565c0 !important;
+}
+
+#sharepoint-folder-select option.level-1 {
+  background-color: #f5f5f5 !important;
+  color: #424242 !important;
+}
+
+#sharepoint-folder-select option.level-2 {
+  background-color: #fafafa !important;
+  color: #616161 !important;
+}
+
+#sharepoint-folder-select option.level-3 {
+  background-color: #ffffff !important;
+  color: #757575 !important;
+}
+
+#sharepoint-folder-select option.level-4 {
+  background-color: #f8f8f8 !important;
+  color: #9e9e9e !important;
+}
+</style>
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>{{ project.name }}</h1>
+    <div>
+      <a href="{% url 'projects:update' project.id %}" class="btn btn-outline-primary me-2">
+        <i class="bi bi-pencil"></i> Edit Project
+      </a>
+      <a href="{% url 'tenders:send_invitation' project.id %}" class="btn btn-primary">
+        <i class="bi bi-send"></i> Send Tender Invitations
+      </a>
+    </div>
+  </div>
+
+  <div class="row">
+    <!-- Main Content -->
+    <div class="col-md-8">
+      <div class="row">
+        <!-- Basic Information -->
+        <div class="col-md-6">
+          <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+              <h5 class="mb-0">Basic Information</h5>
+            </div>
+            <div class="card-body">
+              <table class="table table-borderless">
+                <tr>
+                  <td><strong>Reference:</strong></td>
+                  <td>{{ project.reference|default:"Not specified" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Location:</strong></td>
+                  <td>{{ project.location|default:"Not specified" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Status:</strong></td>
+                  <td>
+                    <span class="badge bg-{% if project.status == 'LIVE' %}primary{% elif project.status == 'SUCCESSFUL' %}success{% elif project.status == 'UNSUCCESSFUL' %}danger{% else %}secondary{% endif %}">
+                      {{ project.get_status_display }}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td><strong>Estimator:</strong></td>
+                  <td>{{ project.estimator|default:"Not assigned" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Project Manager:</strong></td>
+                  <td>{{ project.project_manager|default:"Not assigned" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>PMQs:</strong></td>
+                  <td>{{ project.pmqs|default:"Not specified" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Contract Type:</strong></td>
+                  <td>{{ project.contract_type|default:"Not specified" }}</td>
+                </tr>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Key Dates -->
+        <div class="col-md-6">
+          <div class="card mb-4">
+            <div class="card-header bg-info text-white">
+              <h5 class="mb-0">Key Dates</h5>
+            </div>
+            <div class="card-body">
+              <table class="table table-borderless">
+                <tr>
+                  <td><strong>Start Date:</strong></td>
+                  <td>{{ project.start_date|date:"d/m/Y" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Win Room Date:</strong></td>
+                  <td>{{ project.win_room_date|date:"d/m/Y"|default:"Not set" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Site Visit Date:</strong></td>
+                  <td>{{ project.site_visit_date|date:"d/m/Y"|default:"Not set" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>RFI Deadline:</strong></td>
+                  <td>{{ project.rfi_deadline|date:"d/m/Y"|default:"Not set" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>SC Deadline:</strong></td>
+                  <td class="text-danger">{{ project.sc_deadline|date:"d/m/Y"|default:"Not set" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Mid Bid Review:</strong></td>
+                  <td>{{ project.mid_bid_review_date|date:"d/m/Y"|default:"Not set" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Tender Deadline:</strong></td>
+                  <td class="text-primary">{{ project.tender_deadline|date:"d/m/Y H:i"|default:"Not set" }}</td>
+                </tr>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <!-- Tender Details -->
+        <div class="col-md-6">
+          <div class="card mb-4">
+            <div class="card-header bg-success text-white">
+              <h5 class="mb-0">Tender Details</h5>
+            </div>
+            <div class="card-body">
+              <table class="table table-borderless">
+                <tr>
+                  <td><strong>Tender Bid Amount:</strong></td>
+                  <td>
+                    {% if project.tender_bid_amount %}
+                      <span class="text-success fw-bold">£{{ project.tender_bid_amount|floatformat:2 }}</span>
+                    {% else %}
+                      <span class="text-muted">Not submitted</span>
+                    {% endif %}
+                  </td>
+                </tr>
+                <tr>
+                  <td><strong>Margin Percentage:</strong></td>
+                  <td>
+                    {% if project.margin_percentage %}
+                      <span class="text-success">{{ project.margin_percentage }}%</span>
+                    {% else %}
+                      <span class="text-muted">Not specified</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Description -->
+        <div class="col-md-6">
+          <div class="card mb-4">
+            <div class="card-header bg-secondary text-white">
+              <h5 class="mb-0">Description</h5>
+            </div>
+            <div class="card-body">
+              {% if project.description %}
+                <p class="mb-0">{{ project.description|linebreaks }}</p>
+              {% else %}
+                <p class="text-muted mb-0">No description provided.</p>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Key Risks -->
+      {% if project.key_risks %}
+      <div class="card mb-4">
+        <div class="card-header bg-warning">
+          <h5 class="mb-0">Key Risks</h5>
+        </div>
+        <div class="card-body">
+          <p class="mb-0">{{ project.key_risks|linebreaks }}</p>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- AI Analysis Summary -->
+      {% if project.tender_analysis %}
+        <div class="card mb-4 border-info">
+          <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">
+              <i class="bi bi-robot"></i> AI Analysis Summary
+            </h5>
+            <a href="{% url 'tenders:analysis' project.id %}" class="btn btn-dark btn-sm">
+              <i class="bi bi-eye"></i> View Full Analysis
+            </a>
+          </div>
+          <div class="card-body">
+            <div class="row">
+              <div class="col-md-6">
+                <h6>Risk Assessment</h6>
+                <span class="badge
+                  {% if project.tender_analysis.risk_level == 'LOW' %}bg-success
+                  {% elif project.tender_analysis.risk_level == 'MEDIUM' %}bg-warning
+                  {% elif project.tender_analysis.risk_level == 'HIGH' %}bg-danger
+                  {% else %}bg-dark{% endif %} mb-3">
+                  {{ project.tender_analysis.get_risk_level_display }}
+                </span>
+
+                {% if project.tender_analysis.estimated_value_range.min %}
+                  <h6>Estimated Value</h6>
+                  <p>£{{ project.tender_analysis.estimated_value_range.min|floatformat:0 }}
+                  {% if project.tender_analysis.estimated_value_range.max and project.tender_analysis.estimated_value_range.max != project.tender_analysis.estimated_value_range.min %}
+                    - £{{ project.tender_analysis.estimated_value_range.max|floatformat:0 }}
+                  {% endif %}</p>
+                {% endif %}
+              </div>
+              <div class="col-md-6">
+                <h6>AI Recommendations</h6>
+                <p>{{ project.tender_analysis.subcontractor_recommendations.count }} subcontractor recommendations generated</p>
+
+                <h6>Open Questions</h6>
+                <p>{{ project.tender_analysis.tender_questions.count }} clarification questions</p>
+              </div>
+            </div>
+
+            <div class="mt-3">
+              <a href="{% url 'tenders:analysis' project.id %}" class="btn btn-info me-2">
+                <i class="bi bi-robot"></i> View Full Analysis
+              </a>
+              {% if project.tender_analysis.subcontractor_recommendations.count > 0 %}
+                <a href="{% url 'tenders:bulk_invite_recommended' project.id %}" class="btn btn-success">
+                  <i class="bi bi-send"></i> Invite Recommended Subcontractors
+                </a>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+    <div class="card mb-4">
+      <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">
+          <i class="bi bi-folder-symlink me-2"></i>SharePoint Documents & AI Analysis
+        </h5>
+        <div>
+          <button type="button" class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#updateSharePointModal">
+            <i class="bi bi-pencil"></i> Update Link
+          </button>
+          {% if project.sharepoint_folder_url %}
+            <button type="button" class="btn btn-sm btn-danger ms-1" onclick="removeSharePointLink({{ project.id }})">
+              <i class="bi bi-trash"></i> Remove Link
+            </button>
+          {% endif %}
+        </div>
+      </div>
+      <div class="card-body">
+        {% if project.sharepoint_folder_url %}
+          <!-- SharePoint Link Display -->
+          <div class="d-flex align-items-center justify-content-between p-3 border rounded bg-light mb-3">
+            <div>
+              <h6 class="mb-1">
+                <i class="bi bi-link-45deg text-primary me-2"></i>
+                {{ project.sharepoint_link_description|default:"ITT Documents" }}
+              </h6>
+              <small class="text-muted">{{ project.sharepoint_folder_url|truncatechars:80 }}</small>
+            </div>
+            <div>
+              <a href="{{ project.sharepoint_folder_url }}" class="btn btn-primary btn-sm me-2" target="_blank">
+                <i class="bi bi-box-arrow-up-right"></i> Open in SharePoint
+              </a>
+              <button type="button" class="btn btn-outline-secondary btn-sm" onclick="copyToClipboard('{{ project.sharepoint_folder_url }}')">
+                <i class="bi bi-clipboard"></i> Copy Link
+              </button>
+            </div>
+          </div>
+
+          <!-- AI Analysis Section -->
+          <div class="border-top pt-3">
+            <h6 class="mb-3">
+              <i class="bi bi-robot me-2"></i>AI Analysis Status
+            </h6>
+
+            {% if project.tender_analysis %}
+              <!-- Analysis Complete -->
+              <div class="alert alert-success">
+                <i class="bi bi-check-circle me-2"></i>
+                <strong>AI Analysis Complete</strong> - Documents analyzed from all folders and subfolders.
+                <div class="mt-2">
+                  <small>
+                    {{ project.tender_analysis.subcontractor_recommendations.count }} recommendations •
+                    {{ project.tender_analysis.tender_questions.count }} questions identified
+                  </small>
+                </div>
+              </div>
+
+              <div class="d-flex gap-2">
+                <a href="{% url 'tenders:analysis' project.id %}" class="btn btn-info btn-sm">
+                  <i class="bi bi-eye"></i> View Analysis
+                </a>
+                <form method="post" action="{% url 'tenders:update_analysis' project.id %}" style="display: inline;">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-warning btn-sm">
+                    <i class="bi bi-arrow-clockwise"></i> Update Analysis
+                  </button>
+                </form>
+              </div>
+            {% else %}
+              <!-- No Analysis -->
+              <div class="alert alert-dark border">
+                <i class="bi bi-info-circle me-2"></i>
+                <strong>Ready for AI Analysis</strong> - Click below to analyze all documents and generate insights.
+              </div>
+
+              <form method="post" action="{% url 'tenders:generate_analysis' project.id %}">
+                {% csrf_token %}
+                <div class="mb-3">
+                  <div class="form-check">
+                    <input class="form-check-input" type="checkbox" name="recursive" value="true" id="recursiveAnalysis" checked>
+                    <label class="form-check-label" for="recursiveAnalysis">
+                      <strong>Deep Scan</strong> - Analyze all subfolders (recommended)
+                    </label>
+                  </div>
+                </div>
+                <!-- REPLACE your existing analysis button with this -->
+                <button type="button" class="btn btn-warning btn-lg" onclick="generateEnhancedAnalysis()">
+                  <i class="bi bi-magic"></i> Generate Enhanced AI Analysis
+                </button>
+
+                <script>
+                function generateEnhancedAnalysis() {
+                  // Show the overlay
+                  showAnalysisOverlay();
+
+                  // Submit the form
+                  const form = document.createElement('form');
+                  form.method = 'POST';
+                  form.action = '{% url "tenders:generate_analysis" project.id %}';
+
+                  const csrfToken = document.createElement('input');
+                  csrfToken.type = 'hidden';
+                  csrfToken.name = 'csrfmiddlewaretoken';
+                  csrfToken.value = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+                  const recursiveInput = document.createElement('input');
+                  recursiveInput.type = 'hidden';
+                  recursiveInput.name = 'recursive';
+                  recursiveInput.value = 'true';
+
+                  form.appendChild(csrfToken);
+                  form.appendChild(recursiveInput);
+                  document.body.appendChild(form);
+                  form.submit();
+                }
+                </script>
+              </form>
+            {% endif %}
+          </div>
+        {% else %}
+          <!-- No SharePoint Link -->
+          <div class="alert alert-warning">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            <strong>SharePoint folder not configured</strong>
+            <p class="mb-0 mt-2">Add a SharePoint link to enable document analysis and AI insights.</p>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+      <!-- Email Monitoring Card -->
+      <div class="card mb-4">
+        <div class="card-header bg-primary d-flex justify-content-between align-items-center">
+          <h5 class="mb-0">Email Monitoring</h5>
+          <div>
+            {% if project.email_config %}
+              <a href="{% url 'communications:check_now' project.id %}" class="btn btn-sm btn-success me-2">
+                <i class="bi bi-arrow-clockwise"></i> Check Now
+              </a>
+            {% endif %}
+            <button type="button" class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#emailMonitoringModal">
+              <i class="bi bi-gear"></i> Configure
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          {% if project.email_config %}
+            <p><strong>Monitoring Status:</strong>
+              {% if project.email_config.is_active %}
+                <span class="badge bg-success">Active</span>
+              {% else %}
+                <span class="badge bg-secondary">Inactive</span>
+              {% endif %}
+            </p>
+            <p><strong>Folder Name:</strong> {{ project.email_config.folder_name }}</p>
+            <p><strong>Last Checked:</strong>
+              {% if project.email_config.last_check_time %}
+                {{ project.email_config.last_check_time|date:"d/m/Y H:i" }}
+              {% else %}
+                Never <small class="text-muted">(click "Check Now" to run manually)</small>
+              {% endif %}
+            </p>
+          {% else %}
+            <p class="text-muted">Email monitoring not configured. Click Configure to set up.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="col-md-4">
+      <!-- Tender Statistics -->
+      <div class="card mb-4">
+        <div class="card-header bg-white">
+          <h5 class="mb-0">Tender Statistics</h5>
+        </div>
+        <div class="card-body">
+          {% with invitation_count=project.invitations.count %}
+            {% if invitation_count > 0 %}
+              <div class="row text-center">
+                <div class="col-4">
+                  <div class="display-6">{{ invitation_count }}</div>
+                  <div class="small text-muted">Invitations</div>
+                </div>
+                <div class="col-4">
+                  <div class="display-6 text-success">{{ accepted_count|default:"0" }}</div>
+                  <div class="small text-muted">Will Tender</div>
+                </div>
+                <div class="col-4">
+                  <div class="display-6 text-danger">{{ declined_count|default:"0" }}</div>
+                  <div class="small text-muted">Won't Tender</div>
+                </div>
+              </div>
+
+              <div class="d-grid mt-3">
+                <a href="{% url 'tenders:tracking' project.id %}" class="btn btn-primary">
+                  <i class="bi bi-kanban"></i> View Tender Tracking
+                </a>
+              </div>
+            {% else %}
+              <div class="text-center py-3">
+                <div class="text-muted mb-3">No tender invitations have been sent yet.</div>
+                <a href="{% url 'tenders:send_invitation' project.id %}" class="btn btn-primary">
+                  <i class="bi bi-send"></i> Send Invitations
+                </a>
+              </div>
+            {% endif %}
+          {% endwith %}
+        </div>
+      </div>
+
+      <!-- AI Analysis Quick Actions -->
+      {% if project.tender_analysis %}
+        <div class="card mb-4 border-info">
+          <div class="card-header bg-info text-white">
+            <h5 class="mb-0">
+              <i class="bi bi-robot"></i> AI Insights
+            </h5>
+          </div>
+          <div class="list-group list-group-flush">
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+              Risk Level
+              <span class="badge
+                {% if project.tender_analysis.risk_level == 'LOW' %}bg-success
+                {% elif project.tender_analysis.risk_level == 'MEDIUM' %}bg-warning
+                {% elif project.tender_analysis.risk_level == 'HIGH' %}bg-danger
+                {% else %}bg-dark{% endif %}">
+                {{ project.tender_analysis.get_risk_level_display }}
+              </span>
+            </div>
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+              Recommendations
+              <span class="badge bg-primary">{{ project.tender_analysis.subcontractor_recommendations.count }}</span>
+            </div>
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+              Open Questions
+              <span class="badge bg-warning">{{ project.tender_analysis.tender_questions.count }}</span>
+            </div>
+            <a href="{% url 'tenders:analysis' project.id %}" class="list-group-item list-group-item-action text-center">
+              <i class="bi bi-eye me-2"></i> View Full Analysis
+            </a>
+          </div>
+        </div>
+      {% endif %}
+
+      <!-- Project Actions -->
+      <div class="card mb-4">
+        <div class="card-header bg-primary text-white">
+          <h5 class="mb-0">Project Actions</h5>
+        </div>
+        <div class="card-body">
+          <div class="d-grid gap-2">
+            <a href="{% url 'tenders:analysis' project.id %}" class="btn btn-info">
+              <i class="bi bi-robot me-2"></i> AI Analysis
+            </a>
+            <a href="{% url 'tenders:send_invitation' project.id %}" class="btn btn-success">
+              <i class="bi bi-send me-2"></i> Send Tender Invitations
+            </a>
+            <a href="{% url 'tenders:tracking' project.id %}" class="btn btn-warning">
+              <i class="bi bi-kanban me-2"></i> View Tender Tracking
+            </a>
+            <a href="{% url 'tenders:send_addendum' project.id %}" class="btn btn-dark">
+              <i class="bi bi-file-earmark-plus me-2"></i> Send Tender Addendum
+            </a>
+            <a href="{% url 'tenders:send_reminders' project.id %}" class="btn btn-info">
+              <i class="bi bi-bell me-2"></i> Send Reminders
+            </a>
+            <a href="{% url 'projects:update' project.id %}" class="btn btn-secondary">
+              <i class="bi bi-pencil me-2"></i> Edit Project Details
+            </a>
+            <a href="{% url 'projects:delete' project.id %}" class="btn btn-danger">
+              <i class="bi bi-trash me-2"></i> Delete Project
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Replace the SharePoint modal section in your project_detail.html with this simpler version -->
+
+<!-- Update SharePoint Modal - SIMPLIFIED VERSION -->
+<div class="modal fade" id="updateSharePointModal" tabindex="-1" aria-labelledby="updateSharePointModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title" id="updateSharePointModalLabel">
+          <i class="bi bi-folder-symlink me-2"></i>Configure SharePoint Documents Folder
+        </h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form method="post" action="{% url 'projects:update_sharepoint_link' project.id %}">
+        <div class="modal-body">
+          {% csrf_token %}
+
+          <!-- Simple Instructions -->
+          <div class="alert alert-info">
+            <h6><i class="bi bi-info-circle me-2"></i>How to Get Your SharePoint Folder URL</h6>
+            <ol class="mb-2">
+              <li>Go to your SharePoint folder in your browser</li>
+              <li>Navigate to: <strong>Estimating → Live → [Your Project]</strong></li>
+              <li>Copy the URL from your browser's address bar</li>
+              <li>Paste it below</li>
+            </ol>
+            <small class="text-muted">
+              Example: <code>https://taknoxltd62.sharepoint.com/sites/TAKNOXLTD/Shared%20Documents/Estimating/Live/Arsenal%20Physio%20Room</code>
+            </small>
+          </div>
+
+          <!-- SharePoint URL Input -->
+          <div class="mb-3">
+            <label for="sharepoint_folder_url" class="form-label">
+              <i class="bi bi-link me-2"></i>SharePoint Folder URL *
+            </label>
+            <input type="url" class="form-control" id="sharepoint_folder_url" name="sharepoint_folder_url"
+                   value="{{ project.sharepoint_folder_url|default:'' }}"
+                   placeholder="https://taknoxltd62.sharepoint.com/sites/TAKNOXLTD/Shared%20Documents/Estimating/Live/YourProject"
+                   required>
+            <div class="form-text">
+              Paste the complete SharePoint URL from your browser. The system will automatically validate and parse it.
+            </div>
+          </div>
+
+          <!-- Auto-detected Info Display -->
+          <div id="url-analysis" class="alert alert-light" style="display: none;">
+            <h6><i class="bi bi-check-circle text-success me-2"></i>URL Analysis</h6>
+            <div class="row">
+              <div class="col-md-6">
+                <p class="mb-1"><strong>Site:</strong> <span id="detected-site">-</span></p>
+                <p class="mb-1"><strong>Base Path:</strong> <span id="detected-base">-</span></p>
+              </div>
+              <div class="col-md-6">
+                <p class="mb-1"><strong>Project Folder:</strong> <span id="detected-project">-</span></p>
+                <p class="mb-1"><strong>Folder Depth:</strong> <span id="detected-depth">-</span></p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Validation Messages -->
+          <div id="url-validation" class="alert" style="display: none;"></div>
+
+          <!-- Description -->
+          <div class="mb-3">
+            <label for="sharepoint_description" class="form-label">Description</label>
+            <input type="text" class="form-control" id="sharepoint_description" name="sharepoint_link_description"
+                   value="{{ project.sharepoint_link_description|default:'ITT Documents' }}"
+                   placeholder="e.g., ITT Documents, Tender Package">
+            <div class="form-text">A friendly name for this SharePoint folder</div>
+          </div>
+
+          <!-- AI Analysis Options -->
+          <div class="alert alert-warning">
+            <h6><i class="bi bi-robot me-2"></i>AI Analysis Configuration</h6>
+            <div class="form-check mb-2">
+              <input class="form-check-input" type="checkbox" id="enable_recursive_scan" name="enable_recursive_scan" checked>
+              <label class="form-check-label" for="enable_recursive_scan">
+                <strong>Include subfolders in AI analysis</strong>
+              </label>
+              <div class="form-text">
+                When enabled, AI will scan the main folder and up to 4 levels of subfolders for comprehensive analysis.
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="save-sharepoint-btn">
+            <i class="bi bi-save me-2"></i>Save SharePoint Folder
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ADD this overlay HTML to your project_detail.html template -->
+<div id="analysis-overlay" class="analysis-overlay" style="display: none;">
+  <div class="overlay-content">
+    <div class="analysis-header text-center">
+      <h4><i class="bi bi-robot me-2"></i>Comprehensive AI Analysis in Progress</h4>
+      <p>Analyzing SharePoint documents with senior estimator-level insights</p>
+    </div>
+
+    <!-- File Format Analysis -->
+    <div class="file-format-section" id="format-analysis" style="display: none;">
+      <h6><i class="bi bi-file-earmark-text me-2"></i>File Format Detection</h6>
+      <div class="row">
+        <div class="col-6">
+          <div><i class="bi bi-file-pdf text-danger me-1"></i>PDF: <span id="pdf-count">0</span></div>
+          <div><i class="bi bi-file-word text-primary me-1"></i>Word: <span id="word-count">0</span></div>
+          <div><i class="bi bi-file-excel text-success me-1"></i>Excel: <span id="excel-count">0</span></div>
+        </div>
+        <div class="col-6">
+          <div>Total: <span id="total-count">0</span></div>
+          <div>Readable: <span id="readable-count">0</span></div>
+          <div class="progress mt-2">
+            <div class="progress-bar bg-success" id="readability-bar" style="width: 0%"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Progress Steps -->
+    <div class="progress-steps mt-4">
+      <div class="step" id="step-1">
+        <i class="bi bi-wifi"></i> Connecting to SharePoint
+      </div>
+      <div class="step" id="step-2">
+        <i class="bi bi-folder"></i> Scanning folder structure
+      </div>
+      <div class="step" id="step-3">
+        <i class="bi bi-search"></i> Detecting file formats
+      </div>
+      <div class="step" id="step-4">
+        <i class="bi bi-download"></i> Processing documents
+      </div>
+      <div class="step" id="step-5">
+        <i class="bi bi-brain"></i> AI comprehensive analysis
+      </div>
+      <div class="step" id="step-6">
+        <i class="bi bi-check-circle"></i> Generating insights
+      </div>
+    </div>
+
+    <div class="text-center mt-4">
+      <div class="spinner-border text-primary" role="status"></div>
+      <p class="mt-2" id="status-text">Initializing analysis...</p>
+    </div>
+  </div>
+</div>
+
+<style>
+.analysis-overlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.8); z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+}
+.overlay-content {
+  background: white; border-radius: 12px; padding: 30px;
+  max-width: 600px; width: 90%; box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+}
+.step {
+  padding: 10px; margin: 5px 0; border-radius: 5px;
+  background: #f8f9fa; opacity: 0.5; transition: all 0.3s;
+}
+.step.active { background: #d4edda; opacity: 1; }
+.step.completed { background: #d1ecf1; opacity: 1; }
+.file-format-section {
+  background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;
+}
+</style>
+
+<script>
+function showAnalysisOverlay() {
+  document.getElementById('analysis-overlay').style.display = 'flex';
+
+  // Simulate progress
+  setTimeout(() => activateStep(1), 1000);
+  setTimeout(() => { completeStep(1); activateStep(2); }, 2000);
+  setTimeout(() => { completeStep(2); activateStep(3); showFileFormats(); }, 3000);
+  setTimeout(() => { completeStep(3); activateStep(4); }, 4000);
+  setTimeout(() => { completeStep(4); activateStep(5); updateStatus('Running comprehensive AI analysis...'); }, 5000);
+  setTimeout(() => { completeStep(5); activateStep(6); updateStatus('Generating insights and recommendations...'); }, 8000);
+}
+
+function activateStep(num) {
+  document.getElementById('step-' + num).classList.add('active');
+}
+
+function completeStep(num) {
+  const step = document.getElementById('step-' + num);
+  step.classList.remove('active');
+  step.classList.add('completed');
+}
+
+function showFileFormats() {
+  document.getElementById('format-analysis').style.display = 'block';
+  // Simulate file detection
+  document.getElementById('pdf-count').textContent = '12';
+  document.getElementById('word-count').textContent = '8';
+  document.getElementById('excel-count').textContent = '3';
+  document.getElementById('total-count').textContent = '25';
+  document.getElementById('readable-count').textContent = '23';
+  document.getElementById('readability-bar').style.width = '92%';
+}
+
+function updateStatus(text) {
+  document.getElementById('status-text').textContent = text;
+}
+
+function hideAnalysisOverlay() {
+  document.getElementById('analysis-overlay').style.display = 'none';
+}
+</script>
+
+<!-- Enhanced JavaScript for URL Parsing and Validation -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const urlInput = document.getElementById('sharepoint_folder_url');
+    const urlAnalysis = document.getElementById('url-analysis');
+    const urlValidation = document.getElementById('url-validation');
+    const saveBtn = document.getElementById('save-sharepoint-btn');
+
+    if (urlInput) {
+        // Analyze URL as user types
+        urlInput.addEventListener('input', analyzeSharePointURL);
+
+        // Analyze on page load if URL exists
+        if (urlInput.value) {
+            analyzeSharePointURL();
+        }
+    }
+
+    function analyzeSharePointURL() {
+        const url = urlInput.value.trim();
+
+        if (!url) {
+            hideUrlAnalysis();
+            return;
+        }
+
+        try {
+            const analysis = parseSharePointURL(url);
+
+            if (analysis.isValid) {
+                showUrlAnalysis(analysis);
+                showValidation('success', `✅ Valid SharePoint URL detected for project: ${analysis.projectName}`);
+                saveBtn.disabled = false;
+            } else {
+                hideUrlAnalysis();
+                showValidation('danger', `❌ ${analysis.error}`);
+                saveBtn.disabled = true;
+            }
+
+        } catch (error) {
+            hideUrlAnalysis();
+            showValidation('danger', `❌ Invalid URL format: ${error.message}`);
+            saveBtn.disabled = true;
+        }
+    }
+
+    function parseSharePointURL(url) {
+        try {
+            const urlObj = new URL(url);
+
+            // Check if it's a SharePoint URL
+            if (!urlObj.hostname.includes('sharepoint.com')) {
+                return {
+                    isValid: false,
+                    error: 'URL must be from sharepoint.com'
+                };
+            }
+
+            // Check if it's TA Knox site
+            if (!urlObj.hostname.includes('taknoxltd62')) {
+                return {
+                    isValid: false,
+                    error: 'URL must be from the TA Knox SharePoint site (taknoxltd62.sharepoint.com)'
+                };
+            }
+
+            // Parse the path
+            const path = decodeURIComponent(urlObj.pathname);
+
+            // Check for required path structure
+            if (!path.includes('/sites/TAKNOXLTD/')) {
+                return {
+                    isValid: false,
+                    error: 'URL must be from the TAKNOXLTD site'
+                };
+            }
+
+            if (!path.includes('Shared%20Documents') && !path.includes('Shared Documents')) {
+                return {
+                    isValid: false,
+                    error: 'URL must point to a folder in Shared Documents'
+                };
+            }
+
+            // Extract folder path
+            let folderPath = '';
+            if (path.includes('Shared%20Documents/')) {
+                folderPath = path.split('Shared%20Documents/')[1] || '';
+            } else if (path.includes('Shared Documents/')) {
+                folderPath = path.split('Shared Documents/')[1] || '';
+            }
+
+            // Clean up the folder path
+            folderPath = decodeURIComponent(folderPath);
+            const pathParts = folderPath.split('/').filter(part => part.trim());
+
+            // Check if it's in Estimating/Live
+            const isEstimatingLive = pathParts.length >= 2 &&
+                                   pathParts[0].toLowerCase() === 'estimating' &&
+                                   pathParts[1].toLowerCase() === 'live';
+
+            let projectName = 'Unknown';
+            let folderDepth = pathParts.length;
+
+            if (isEstimatingLive && pathParts.length >= 3) {
+                projectName = pathParts[2];
+            } else if (pathParts.length > 0) {
+                projectName = pathParts[pathParts.length - 1];
+            }
+
+            return {
+                isValid: true,
+                siteName: 'TAKNOXLTD',
+                basePath: isEstimatingLive ? 'Estimating/Live' : pathParts.slice(0, -1).join('/'),
+                projectName: projectName,
+                fullPath: pathParts.join(' > '),
+                folderDepth: folderDepth,
+                isEstimatingLive: isEstimatingLive,
+                cleanUrl: url
+            };
+
+        } catch (error) {
+            return {
+                isValid: false,
+                error: 'Invalid URL format'
+            };
+        }
+    }
+
+    function showUrlAnalysis(analysis) {
+        document.getElementById('detected-site').textContent = analysis.siteName;
+        document.getElementById('detected-base').textContent = analysis.basePath;
+        document.getElementById('detected-project').textContent = analysis.projectName;
+        document.getElementById('detected-depth').textContent = `Level ${analysis.folderDepth}`;
+
+        urlAnalysis.style.display = 'block';
+    }
+
+    function hideUrlAnalysis() {
+        urlAnalysis.style.display = 'none';
+    }
+
+    function showValidation(type, message) {
+        urlValidation.className = `alert alert-${type}`;
+        urlValidation.innerHTML = message;
+        urlValidation.style.display = 'block';
+    }
+
+    function hideValidation() {
+        urlValidation.style.display = 'none';
+    }
+});
+
+// Enhanced analysis generation with scanning overlay
+function generateAnalysisWithOptions() {
+    const recursive = document.getElementById('recursiveAnalysis')?.checked ?? true;
+    const analysisType = recursive ? 'all folders and subfolders' : 'main folder only';
+
+    if (confirm(`Generate AI analysis from ${analysisType}? This may take a few minutes.`)) {
+        // Show scanning overlay if it exists
+        if (typeof startAnalysisWithOverlay === 'function') {
+            startAnalysisWithOverlay(recursive);
+        }
+
+        // Create a form and submit it
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '{% url "tenders:generate_analysis" project.id %}';
+
+        // Add CSRF token
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+        const csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = 'csrfmiddlewaretoken';
+        csrfInput.value = csrfToken;
+        form.appendChild(csrfInput);
+
+        // Add recursive option
+        const recursiveInput = document.createElement('input');
+        recursiveInput.type = 'hidden';
+        recursiveInput.name = 'recursive';
+        recursiveInput.value = recursive ? 'true' : 'false';
+        form.appendChild(recursiveInput);
+
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+</script>
+
+<style>
+/* Enhanced styling for the simple SharePoint modal */
+#sharepoint_folder_url {
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    padding: 10px;
+}
+
+#url-analysis {
+    border: 1px solid #28a745;
+    background-color: #f8fff8;
+}
+
+#url-validation.alert-success {
+    border-color: #28a745;
+    background-color: #d4edda;
+    color: #155724;
+}
+
+#url-validation.alert-danger {
+    border-color: #dc3545;
+    background-color: #f8d7da;
+    color: #721c24;
+}
+
+.form-control:focus {
+    border-color: #007bff;
+    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+}
+
+.alert code {
+    background-color: rgba(0, 0, 0, 0.1);
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+</style>
+
+
+<!-- Email Monitoring Modal -->
+<div class="modal fade" id="emailMonitoringModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Configure Email Monitoring</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form method="post" action="{% url 'communications:configure_monitoring' project.id %}">
+        <div class="modal-body">
+          <div class="mb-3" id="folderSelectionLoading">
+            <div class="d-flex align-items-center">
+              <strong>Loading folders...</strong>
+              <div class="spinner-border ms-auto" role="status" aria-hidden="true"></div>
+            </div>
+          </div>
+
+          <div class="mb-3" id="folderSelectionContainer" style="display:none;">
+            {% csrf_token %}
+            <label for="id_folder" class="form-label">Outlook Folder</label>
+            <select id="id_folder" name="folder" class="form-select" required>
+              <option value="">Select a folder</option>
+            </select>
+            <input type="hidden" id="id_folder_id" name="folder_id" value="">
+            <div class="form-text">Select the Outlook folder that contains tender returns for this project.</div>
+          </div>
+
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="id_is_active" name="is_active"
+                   {% if project.email_config and project.email_config.is_active %}checked{% endif %}>
+            <label class="form-check-label" for="id_is_active">Active</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Configuration</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+
+function removeSharePointLink(projectId) {
+    if (confirm('Are you sure you want to remove the SharePoint link? This will also remove any associated AI analysis.')) {
+        fetch(`/projects/${projectId}/remove-sharepoint-link/`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                location.reload();
+            } else {
+                alert('Error removing SharePoint link: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error: ' + error);
+        });
+    }
+}
+
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(function() {
+        // Show brief success message
+        const btn = event.target.closest('button');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="bi bi-check"></i> Copied!';
+        setTimeout(() => { btn.innerHTML = originalText; }, 2000);
+    }).catch(function(err) {
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+
+        const btn = event.target.closest('button');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="bi bi-check"></i> Copied!';
+        setTimeout(() => { btn.innerHTML = originalText; }, 2000);
+    });
+}
+</script>
+<script>
+// Enhanced analysis generation with recursive option
+function generateAnalysisWithOptions() {
+    const recursive = document.getElementById('recursiveAnalysis').checked;
+    const analysisType = recursive ? 'all folders and subfolders' : 'main folder only';
+
+    if (confirm(`Generate AI analysis from ${analysisType}? This may take a few minutes.`)) {
+        // Create a form and submit it
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '{% url "tenders:generate_analysis" project.id %}';
+
+        // Add CSRF token
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+        const csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = 'csrfmiddlewaretoken';
+        csrfInput.value = csrfToken;
+        form.appendChild(csrfInput);
+
+        // Add recursive option
+        const recursiveInput = document.createElement('input');
+        recursiveInput.type = 'hidden';
+        recursiveInput.name = 'recursive';
+        recursiveInput.value = recursive ? 'true' : 'false';
+        form.appendChild(recursiveInput);
+
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+</script>
+<script>
+// Enhanced SharePoint folder selection with dropdown like email configuration
+document.addEventListener('DOMContentLoaded', function() {
+    const sharepointSelect = document.getElementById('sharepoint_folder_select');
+    const manualUrlInput = document.getElementById('manual-sharepoint-url');
+    const sharepointDescription = document.getElementById('sharepoint_description');
+    const saveSharepointBtn = document.getElementById('save-sharepoint-btn');
+    const loadSharepointBtn = document.getElementById('load-sharepoint-folders');
+    const testConnectionBtn = document.getElementById('test-sharepoint-connection');
+    const folderIdInput = document.getElementById('sharepoint_folder_id');
+
+    let selectedSharepointFolder = null;
+
+    // Test connection button
+    if (testConnectionBtn) {
+        testConnectionBtn.addEventListener('click', testSharePointConnection);
+    }
+
+    // Load button handler
+    if (loadSharepointBtn) {
+        loadSharepointBtn.addEventListener('click', loadSharePointFolders);
+    }
+
+    // SharePoint select handler
+    if (sharepointSelect) {
+        sharepointSelect.addEventListener('change', function() {
+            const selectedOption = this.options[this.selectedIndex];
+            if (selectedOption.value) {
+                selectedSharepointFolder = {
+                    id: selectedOption.dataset.folderId || 'unknown',
+                    name: selectedOption.textContent,
+                    url: selectedOption.value,
+                    path: selectedOption.dataset.folderPath || selectedOption.textContent
+                };
+                manualUrlInput.value = selectedOption.value; // Sync with manual input
+                showSharepointPreview();
+                saveSharepointBtn.disabled = false;
+            } else {
+                selectedSharepointFolder = null;
+                hideSharepointPreview();
+                saveSharepointBtn.disabled = false; // Keep enabled for manual entry
+            }
+        });
+    }
+
+    // Manual URL input handler
+    if (manualUrlInput) {
+        manualUrlInput.addEventListener('input', function() {
+            if (this.value.trim()) {
+                selectedSharepointFolder = {
+                    id: 'manual',
+                    name: 'Manual URL Entry',
+                    url: this.value.trim(),
+                    path: extractPathFromUrl(this.value.trim())
+                };
+                sharepointSelect.value = ''; // Clear dropdown selection
+                showSharepointPreview();
+                saveSharepointBtn.disabled = false;
+            } else {
+                selectedSharepointFolder = null;
+                hideSharepointPreview();
+                saveSharepointBtn.disabled = false;
+            }
+        });
+    }
+
+    function testSharePointConnection() {
+        testConnectionBtn.disabled = true;
+        testConnectionBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Testing...';
+        hideError('sharepoint-error-message');
+
+        // Simulate connection test
+        setTimeout(() => {
+            const connectionResult = document.getElementById('connection-result');
+            connectionResult.innerHTML = `
+                <div class="alert alert-success">
+                    <h6><i class="bi bi-check-circle me-2"></i>Connection Successful</h6>
+                    <p class="mb-1"><strong>Site ID:</strong> taknox-site-id-12345</p>
+                    <p class="mb-1"><strong>Drive ID:</strong> taknox-drive-id-67890</p>
+                    <p class="mb-0"><strong>Status:</strong> Connected to TA Knox SharePoint successfully</p>
+                </div>
+            `;
+            connectionResult.style.display = 'block';
+
+            testConnectionBtn.disabled = false;
+            testConnectionBtn.innerHTML = '<i class="bi bi-wifi"></i> Test SharePoint Connection';
+        }, 1500);
+    }
+
+    function loadSharePointFolders() {
+        loadSharepointBtn.disabled = true;
+        sharepointSelect.disabled = true;
+        sharepointSelect.innerHTML = '<option value="">Loading...</option>';
+        hideError('sharepoint-error-message');
+        showLoading('folderSelectionLoading');
+
+        loadSharepointBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Loading...';
+
+        console.log('🔄 Starting SharePoint folder load...');
+
+        // Make actual API call to get real SharePoint folders
+        fetch('{% url "projects:get_sharepoint_folders" %}', {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+            }
+        })
+        .then(response => {
+            console.log('📡 Response status:', response.status);
+            console.log('📡 Response headers:', response.headers.get('Content-Type'));
+
+            // Check if the response is actually JSON
+            const contentType = response.headers.get('Content-Type');
+            if (!contentType || !contentType.includes('application/json')) {
+                throw new Error(`Expected JSON but got ${contentType}. Response status: ${response.status}`);
+            }
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            return response.json();
+        })
+        .then(data => {
+            console.log('📦 Response data:', data);
+
+            if (data.success) {
+                console.log(`✅ Loaded ${data.folders.length} real SharePoint folders`);
+                console.log('📁 Sample folders:', data.folders.slice(0, 3));
+
+                // Validate folders data
+                if (!Array.isArray(data.folders)) {
+                    throw new Error('Folders data is not an array');
+                }
+
+                populateSharePointSelect(data.folders);
+
+                // Show success message
+                const successMsg = document.createElement('div');
+                successMsg.className = 'alert alert-success mt-2';
+                successMsg.innerHTML = `
+                    <i class="bi bi-check-circle me-2"></i>
+                    <strong>Connected!</strong> Found ${data.folders.length} folders from your SharePoint.
+                    ${data.source ? `<br><small>Source: ${data.source}</small>` : ''}
+                `;
+
+                // Remove any existing success messages
+                const existingSuccess = document.querySelector('.alert-success');
+                if (existingSuccess) {
+                    existingSuccess.remove();
+                }
+
+                hideError('sharepoint-error-message');
+                const errorElement = document.getElementById('sharepoint-error-message');
+                if (errorElement && errorElement.parentNode) {
+                    errorElement.parentNode.insertBefore(successMsg, errorElement);
+                    setTimeout(() => {
+                        if (successMsg.parentNode) {
+                            successMsg.remove();
+                        }
+                    }, 5000);
+                }
+
+                // Show connection info if available
+                if (data.connection_info) {
+                    console.log('🔗 Connection info:', data.connection_info);
+                }
+            } else {
+                console.error('❌ SharePoint API Error:', data.error);
+
+                let errorMsg = `Failed to load SharePoint folders: ${data.error}`;
+
+                // Add diagnostic info if available
+                if (data.diagnostic) {
+                    errorMsg += `<br><br><strong>Diagnostic Info:</strong>`;
+                    errorMsg += `<br>• Has Token: ${data.diagnostic.has_token ? '✅' : '❌'}`;
+                    errorMsg += `<br>• Service Available: ${data.diagnostic.service_available ? '✅' : '❌'}`;
+                    if (data.diagnostic.methods_tried) {
+                        errorMsg += `<br>• Methods Tried: ${data.diagnostic.methods_tried.join(', ')}`;
+                    }
+                }
+
+                // Add help message if available
+                if (data.help) {
+                    errorMsg += `<br><br><strong>Help:</strong> ${data.help}`;
+                }
+
+                showError('sharepoint-error-message', errorMsg);
+            }
+        })
+        .catch(error => {
+            console.error('🚨 Network/Parse Error:', error);
+
+            let errorMessage = `Network/Parse error: ${error.message}`;
+
+            // More specific error handling
+            if (error.message.includes('JSON')) {
+                errorMessage += '<br><br><strong>This suggests the server returned HTML instead of JSON.</strong>';
+                errorMessage += '<br>• Check browser Network tab for the actual response';
+                errorMessage += '<br>• Verify the URL pattern exists in projects/urls.py';
+                errorMessage += '<br>• Check for Django errors in server logs';
+            } else if (error.message.includes('HTTP')) {
+                errorMessage += '<br><br><strong>HTTP Error:</strong>';
+                errorMessage += '<br>• Check that the endpoint exists';
+                errorMessage += '<br>• Verify authentication and permissions';
+            }
+
+            showError('sharepoint-error-message', errorMessage);
+        })
+        .finally(() => {
+            // Always cleanup loading state
+            hideLoading('folderSelectionLoading');
+            loadSharepointBtn.disabled = false;
+            sharepointSelect.disabled = false;
+            loadSharepointBtn.innerHTML = '<i class="bi bi-download"></i> Load Folders';
+
+            // If dropdown is still showing "Loading...", reset it
+            if (sharepointSelect.innerHTML.includes('Loading...')) {
+                sharepointSelect.innerHTML = '<option value="">Select a SharePoint folder...</option>';
+            }
+        });
+    }
+
+    function populateSharePointSelect(folders) {
+        console.log('🔧 Populating dropdown with folders:', folders);
+
+        try {
+            // Clear existing options
+            sharepointSelect.innerHTML = '<option value="">Select a SharePoint folder...</option>';
+
+            if (!Array.isArray(folders) || folders.length === 0) {
+                console.warn('⚠️ No folders to populate or invalid data');
+                sharepointSelect.innerHTML = '<option value="">No folders found</option>';
+                return;
+            }
+
+            folders.forEach((folder, index) => {
+                try {
+                    const option = document.createElement('option');
+
+                    // Ensure we have required properties
+                    const folderUrl = folder.url || folder.web_url || '';
+                    const folderName = folder.name || 'Unnamed Folder';
+                    const folderDepth = folder.depth || 0;
+                    const folderId = folder.id || `folder-${index}`;
+                    const folderPath = folder.full_path || folderName;
+
+                    if (!folderUrl) {
+                        console.warn(`⚠️ Skipping folder ${folderName} - no URL`);
+                        return;
+                    }
+
+                    option.value = folderUrl;
+
+                    // Create proper indentation based on depth (using special characters for better visibility)
+                    let prefix = '';
+                    let displayName = folderName;
+
+                    if (folderDepth === 0) {
+                        // Main project folders
+                        prefix = '📁 ';
+                        displayName = folderName;
+                        option.className = 'main-project';
+                    } else if (folderDepth === 1) {
+                        // Level 1 subfolders
+                        prefix = '  └─ ';
+                        displayName = `${folderName} (L1)`;
+                        option.className = 'level-1';
+                    } else if (folderDepth === 2) {
+                        // Level 2 subfolders
+                        prefix = '    └─ ';
+                        displayName = `${folderName} (L2)`;
+                        option.className = 'level-2';
+                    } else if (folderDepth === 3) {
+                        // Level 3 subfolders
+                        prefix = '      └─ ';
+                        displayName = `${folderName} (L3)`;
+                        option.className = 'level-3';
+                    } else if (folderDepth >= 4) {
+                        // Level 4+ subfolders
+                        prefix = '        └─ ';
+                        displayName = `${folderName} (L4)`;
+                        option.className = 'level-4';
+                    }
+
+                    // Set the text content
+                    option.textContent = `${prefix}${displayName}`;
+                    option.dataset.folderId = folderId;
+                    option.dataset.folderPath = folderPath;
+                    option.dataset.folderDepth = folderDepth;
+
+                    sharepointSelect.appendChild(option);
+
+                    if (index < 5) { // Log first 5 for debugging
+                        console.log(`📁 Added: ${displayName} -> ${folderUrl}`);
+                    }
+
+                } catch (optionError) {
+                    console.error(`❌ Error creating option for folder ${folder.name}:`, optionError);
+                }
+            });
+
+            console.log(`✅ Successfully populated ${folders.length} folders in dropdown`);
+
+            // Set current value if exists (template variable will be replaced by Django)
+            const currentUrl = '{{ project.sharepoint_folder_url|default:"" }}';
+            if (currentUrl && currentUrl !== '') {
+                sharepointSelect.value = currentUrl;
+                sharepointSelect.dispatchEvent(new Event('change'));
+                console.log(`🔗 Set current URL: ${currentUrl}`);
+            }
+
+        } catch (error) {
+            console.error('❌ Critical error in populateSharePointSelect:', error);
+            sharepointSelect.innerHTML = '<option value="">Error loading folders</option>';
+        }
+    }
+
+    function showSharepointPreview() {
+        if (!selectedSharepointFolder) return;
+
+        document.getElementById('sharepoint-preview-name').textContent = selectedSharepointFolder.name;
+        document.getElementById('sharepoint-preview-path').textContent = selectedSharepointFolder.path;
+        document.getElementById('sharepoint-preview-url').textContent = selectedSharepointFolder.url;
+        document.getElementById('sharepoint-preview').style.display = 'block';
+    }
+
+    function hideSharepointPreview() {
+        document.getElementById('sharepoint-preview').style.display = 'none';
+    }
+
+    function showError(elementId, message) {
+        const errorElement = document.getElementById(elementId);
+        if (errorElement) {
+            errorElement.textContent = message;
+            errorElement.style.display = 'block';
+        }
+    }
+
+    function hideError(elementId) {
+        const errorElement = document.getElementById(elementId);
+        if (errorElement) {
+            errorElement.style.display = 'none';
+        }
+    }
+
+    function showLoading(elementId) {
+        const loadingElement = document.getElementById(elementId);
+        if (loadingElement) {
+            loadingElement.style.display = 'block';
+        }
+    }
+
+    function hideLoading(elementId) {
+        const loadingElement = document.getElementById(elementId);
+        if (loadingElement) {
+            loadingElement.style.display = 'none';
+        }
+    }
+
+    function extractPathFromUrl(url) {
+        try {
+            const urlObj = new URL(url);
+            const pathMatch = urlObj.pathname.match(/\/Shared%20Documents(.*)/);
+            return pathMatch ? decodeURIComponent(pathMatch[1]) || '/' : '/';
+        } catch {
+            return '/';
+        }
+    }
+
+    // Set initial value if editing existing project
+    const currentUrl = '{{ project.sharepoint_folder_url|default:"" }}';
+    if (currentUrl && manualUrlInput) {
+        manualUrlInput.value = currentUrl;
+        manualUrlInput.dispatchEvent(new Event('input'));
+    }
+});
+
+// Enhanced analysis generation with recursive option and scanning overlay
+function generateAnalysisWithOptions() {
+    const recursive = document.getElementById('recursiveAnalysis').checked;
+    const analysisType = recursive ? 'all folders and subfolders' : 'main folder only';
+
+    if (confirm(`Generate AI analysis from ${analysisType}? This may take a few minutes.`)) {
+        // Show scanning overlay
+        startAnalysisWithOverlay(recursive);
+
+        // Create a form and submit it
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '{% url "tenders:generate_analysis" project.id %}';
+
+        // Add CSRF token
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+        const csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = 'csrfmiddlewaretoken';
+        csrfInput.value = csrfToken;
+        form.appendChild(csrfInput);
+
+        // Add recursive option
+        const recursiveInput = document.createElement('input');
+        recursiveInput.type = 'hidden';
+        recursiveInput.name = 'recursive';
+        recursiveInput.value = recursive ? 'true' : 'false';
+        form.appendChild(recursiveInput);
+
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+
+function startAnalysisWithOverlay(recursive = true) {
+    const scanningManager = new ScanningOverlayManager();
+    scanningManager.show();
+
+    let documentsFound = 0;
+    let foldersScanned = 0;
+
+    // Simulate the scanning process
+    const scanningInterval = setInterval(() => {
+        const nextStep = scanningManager.nextStep();
+
+        // Simulate finding documents and folders
+        documentsFound += Math.floor(Math.random() * 8) + 3;
+        foldersScanned += Math.floor(Math.random() * 2) + 1;
+        scanningManager.updateCounts(documentsFound, foldersScanned);
+
+        if (nextStep === -1) {
+            // All steps completed
+            clearInterval(scanningInterval);
+            scanningManager.updateStatus('Analysis complete! Redirecting...');
+            scanningManager.updateProgress(100);
+
+            setTimeout(() => {
+                scanningManager.hide();
+            }, 2000);
+        }
+    }, 2500); // Progress every 2.5 seconds
+}
+
+// AI Scanning Overlay Manager
+class ScanningOverlayManager {
+    constructor() {
+        this.overlay = document.getElementById('scanning-overlay');
+        this.currentStep = 0;
+        this.steps = [
+            'step-connecting',
+            'step-scanning',
+            'step-downloading',
+            'step-extracting',
+            'step-analyzing',
+            'step-generating'
+        ];
+        this.stepMessages = [
+            'Establishing connection to SharePoint...',
+            'Scanning folder structure (limited to 3 levels)...',
+            'Downloading documents for analysis...',
+            'Extracting text from PDF, Word, and Excel files...',
+            'Running AI analysis on document content...',
+            'Generating subcontractor recommendations...'
+        ];
+    }
+
+    show() {
+        this.overlay.style.display = 'flex';
+        this.currentStep = 0;
+        this.updateProgress(0);
+        this.activateStep(0);
+        this.updateStatus('Initializing AI analysis...');
+    }
+
+    hide() {
+        this.overlay.style.display = 'none';
+        this.resetSteps();
+    }
+
+    nextStep() {
+        if (this.currentStep < this.steps.length - 1) {
+            this.completeStep(this.currentStep);
+            this.currentStep++;
+            this.activateStep(this.currentStep);
+            this.updateStatus(this.stepMessages[this.currentStep]);
+            this.updateProgress((this.currentStep + 1) * 16.67); // 6 steps = 16.67% each
+
+            return this.currentStep;
+        }
+        return -1; // All steps completed
+    }
+
+    activateStep(stepIndex) {
+        document.getElementById(this.steps[stepIndex]).classList.add('active');
+    }
+
+    completeStep(stepIndex) {
+        const stepElement = document.getElementById(this.steps[stepIndex]);
+        stepElement.classList.remove('active');
+        stepElement.classList.add('completed');
+        stepElement.querySelector('.step-icon i').className = 'bi bi-check-circle-fill';
+    }
+
+    resetSteps() {
+        this.steps.forEach(stepId => {
+            const stepElement = document.getElementById(stepId);
+            stepElement.classList.remove('active', 'completed');
+        });
+
+        // Reset icons
+        document.getElementById('step-connecting').querySelector('.step-icon i').className = 'bi bi-wifi';
+        document.getElementById('step-scanning').querySelector('.step-icon i').className = 'bi bi-folder-fill';
+        document.getElementById('step-downloading').querySelector('.step-icon i').className = 'bi bi-download';
+        document.getElementById('step-extracting').querySelector('.step-icon i').className = 'bi bi-file-text';
+        document.getElementById('step-analyzing').querySelector('.step-icon i').className = 'bi bi-cpu';
+        document.getElementById('step-generating').querySelector('.step-icon i').className = 'bi bi-magic';
+    }
+
+    updateProgress(percentage) {
+        const progressBar = document.getElementById('overall-progress');
+        const progressText = document.getElementById('progress-text');
+
+        if (progressBar) progressBar.style.width = percentage + '%';
+        if (progressText) progressText.textContent = Math.round(percentage) + '% complete';
+    }
+
+    updateStatus(message) {
+        const statusElement = document.getElementById('current-status');
+        if (statusElement) statusElement.textContent = message;
+    }
+
+    updateCounts(documents, folders) {
+        const documentsElement = document.getElementById('documents-count');
+        const foldersElement = document.getElementById('folders-scanned');
+        if (documentsElement) documentsElement.textContent = documents;
+        if (foldersElement) foldersElement.textContent = folders;
+    }
+}
+</script>
+<script>
+// Copy to clipboard function
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(function() {
+        // Show success message
+        const toast = document.createElement('div');
+        toast.className = 'toast align-items-center text-white bg-success border-0';
+        toast.style.position = 'fixed';
+        toast.style.top = '20px';
+        toast.style.right = '20px';
+        toast.style.zIndex = '9999';
+        toast.innerHTML = `
+            <div class="d-flex">
+                <div class="toast-body">
+                    <i class="bi bi-check-circle me-2"></i>SharePoint link copied to clipboard!
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        `;
+        document.body.appendChild(toast);
+
+        if (typeof bootstrap !== 'undefined') {
+            const bsToast = new bootstrap.Toast(toast);
+            bsToast.show();
+
+            // Remove after hiding
+            toast.addEventListener('hidden.bs.toast', () => {
+                toast.remove();
+            });
+        } else {
+            // Fallback if Bootstrap JS not loaded
+            setTimeout(() => {
+                if (document.body.contains(toast)) {
+                    document.body.removeChild(toast);
+                }
+            }, 3000);
+        }
+    }).catch(function(err) {
+        console.error('Could not copy text: ', err);
+        alert('Failed to copy link to clipboard');
+    });
+}
+
+// Load mail folders when the modal opens
+document.getElementById('emailMonitoringModal').addEventListener('show.bs.modal', function (event) {
+  loadMailFolders();
+});
+
+function loadMailFolders() {
+  const loadingDiv = document.getElementById('folderSelectionLoading');
+  const folderContainer = document.getElementById('folderSelectionContainer');
+  const folderSelect = document.getElementById('id_folder');
+  const folderIdInput = document.getElementById('id_folder_id');
+
+  // Show loading indicator
+  loadingDiv.style.display = 'block';
+  folderContainer.style.display = 'none';
+
+  // Make AJAX request to get folders
+  fetch('{% url "communications:mail_folders" %}')
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        // Clear existing options
+        folderSelect.innerHTML = '<option value="">Select a folder</option>';
+
+        // Add folders to dropdown
+        data.folders.forEach(folder => {
+          const option = document.createElement('option');
+          option.value = folder.full_path;
+          option.textContent = folder.full_path;
+          option.dataset.folderId = folder.id;
+          folderSelect.appendChild(option);
+        });
+
+        // Set the current value if exists
+        const currentFolder = '{% if project.email_config %}{{ project.email_config.folder_name }}{% endif %}';
+        if (currentFolder) {
+          folderSelect.value = currentFolder;
+        }
+
+        // Add event listener to update the hidden folder ID field
+        folderSelect.addEventListener('change', function() {
+          const selectedOption = this.options[this.selectedIndex];
+          if (selectedOption) {
+            folderIdInput.value = selectedOption.dataset.folderId || '';
+          }
+        });
+
+        // Trigger change event to set initial folder ID
+        folderSelect.dispatchEvent(new Event('change'));
+
+        // Hide loading, show form
+        loadingDiv.style.display = 'none';
+        folderContainer.style.display = 'block';
+      } else {
+        alert('Error loading folders: ' + data.error);
+      }
+    })
+    .catch(error => {
+      console.error('Error:', error);
+      alert('Failed to load email folders. Please try again.');
+
+      // Hide loading, show form with a message
+      loadingDiv.style.display = 'none';
+      folderContainer.style.display = 'block';
+      folderSelect.innerHTML = '<option value="">Error loading folders</option>';
+    });
+}
+</script>
+{% endblock %}

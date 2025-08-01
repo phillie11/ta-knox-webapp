@@ -1,0 +1,91 @@
+<!-- templates/tenders/ai_diagnostics.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Service Diagnostics</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .section { margin-bottom: 30px; }
+        .section h3 { color: #333; border-bottom: 2px solid #007cba; }
+        .status-ok { color: green; }
+        .status-error { color: red; }
+        .status-warning { color: orange; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .recommendations { background-color: #f9f9f9; padding: 15px; border-radius: 5px; }
+        .recommendations ul { margin: 0; }
+    </style>
+</head>
+<body>
+    <h1>AI Service Diagnostics</h1>
+    
+    <div class="section">
+        <h3>Django Settings</h3>
+        <table>
+            {% for key, value in diagnostics.django_settings.items %}
+            <tr>
+                <td><strong>{{ key }}</strong></td>
+                <td class="{% if value %}status-ok{% else %}status-error{% endif %}">
+                    {{ value }}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    
+    <div class="section">
+        <h3>Import Status</h3>
+        <table>
+            {% for key, value in diagnostics.import_status.items %}
+            <tr>
+                <td><strong>{{ key }}</strong></td>
+                <td class="{% if value == True %}status-ok{% else %}status-error{% endif %}">
+                    {{ value }}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    
+    <div class="section">
+        <h3>Service Status</h3>
+        <table>
+            {% for key, value in diagnostics.service_status.items %}
+            <tr>
+                <td><strong>{{ key }}</strong></td>
+                <td class="{% if 'success' in value or value == True %}status-ok{% else %}status-error{% endif %}">
+                    {{ value }}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    
+    <div class="section">
+        <h3>Recommendations</h3>
+        <div class="recommendations">
+            <ul>
+            {% for recommendation in diagnostics.recommendations %}
+                <li>{{ recommendation }}</li>
+            {% endfor %}
+            </ul>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h3>Quick Actions</h3>
+        <p><strong>To fix common issues:</strong></p>
+        <ol>
+            <li>Make sure your <code>CLAUDE_API_KEY</code> is set in your Django settings</li>
+            <li>Install anthropic if needed: <code>pip install anthropic</code></li>
+            <li>Check that your <code>services/ai_analysis.py</code> file exists and has the correct classes</li>
+            <li>Restart your Django development server after making changes</li>
+        </ol>
+    </div>
+    
+    <div style="margin-top: 40px;">
+        <a href="{% url 'projects:list' %}" style="background: #007cba; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px;">← Back to Projects</a>
+    </div>
+</body>
+</html>

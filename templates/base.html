@@ -1,0 +1,404 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}CRM System{% endblock %}</title>
+
+
+    <!-- Favicon links - Add these lines -->
+    <link rel="icon" type="image/x-icon" href="{% static 'favicon.ico' %}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{% static 'img/favicon-32x32.png' %}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{% static 'img/favicon-16x16.png' %}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{% static 'img/apple-touch-icon.png' %}">
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
+    <link href="{% static 'css/custom.css' %}" rel="stylesheet">
+    <style>
+        /* Base styles - Light theme for unauthenticated users */
+        body {
+            background-color: #f8f9fa;
+            color: #212529;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        /* Navbar styles */
+        .navbar-light {
+            background-color: #ffffff !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .navbar-light .navbar-brand,
+        .navbar-light .navbar-nav .nav-link {
+            color: #212529 !important;
+        }
+
+        .navbar-light .navbar-nav .nav-link:hover {
+            color: #0d6efd !important;
+        }
+
+        /* Content area styles for authenticated users */
+        .authenticated-layout {
+            background-color: #343a40;
+            color: #ffffff;
+            min-height: calc(100vh - 60px);
+        }
+
+        .authenticated-layout .main-content {
+            background-color: #343a40;
+            color: #ffffff;
+            padding: 20px;
+        }
+
+        /* Sidebar styles for authenticated users */
+        .authenticated-layout .sidebar {
+            background-color: #343a40;
+            color: #ffffff;
+            border-right: 1px solid #495057;
+            min-height: calc(100vh - 60px);
+        }
+
+        .authenticated-layout .sidebar .nav-link {
+            color: #adb5bd;
+            padding: 0.75rem 1rem;
+            border-radius: 0.375rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .authenticated-layout .sidebar .nav-link:hover,
+        .authenticated-layout .sidebar .nav-link.active {
+            color: #ffffff;
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .authenticated-layout .sidebar .nav-link i {
+            width: 1.5rem;
+            margin-right: 0.5rem;
+        }
+
+        /* Card styles for authenticated users */
+        .authenticated-layout .card {
+            background-color: #495057;
+            border: 1px solid #6c757d;
+            color: #ffffff;
+        }
+
+        .authenticated-layout .card-header {
+            background-color: #6c757d;
+            border-bottom: 1px solid #adb5bd;
+            color: #ffffff;
+            font-weight: 600;
+        }
+
+        .authenticated-layout .card-body {
+            color: #ffffff;
+        }
+
+        /* Table styles for authenticated users */
+        .authenticated-layout .table {
+            color: #ffffff;
+            --bs-table-bg: transparent;
+        }
+
+        .authenticated-layout .table-light {
+            --bs-table-color: #212529;
+            --bs-table-bg: #f8f9fa;
+        }
+
+        .authenticated-layout .table-light th,
+        .authenticated-layout .table-light td {
+            color: #212529 !important;
+        }
+
+        /* Form styles for authenticated users */
+        .authenticated-layout .form-control {
+            background-color: #6c757d;
+            border-color: #adb5bd;
+            color: #ffffff;
+        }
+
+        .authenticated-layout .form-control:focus {
+            background-color: #6c757d;
+            border-color: #0d6efd;
+            color: #ffffff;
+            box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+        }
+
+        .authenticated-layout .form-control::placeholder {
+            color: #adb5bd;
+        }
+
+        .authenticated-layout .form-select {
+            background-color: #6c757d;
+            border-color: #adb5bd;
+            color: #ffffff;
+        }
+
+        .authenticated-layout .form-select:focus {
+            background-color: #6c757d;
+            border-color: #0d6efd;
+            color: #ffffff;
+        }
+
+        .authenticated-layout .form-label {
+            color: #ffffff;
+        }
+
+        .authenticated-layout .form-text {
+            color: #adb5bd;
+        }
+
+        /* Button styles remain the same as Bootstrap defaults work well */
+
+        /* Alert styles for authenticated users */
+        .authenticated-layout .alert {
+            border: none;
+        }
+
+        /* Text colors for authenticated users */
+        .authenticated-layout .text-muted {
+            color: #adb5bd !important;
+        }
+
+        .authenticated-layout .text-primary {
+            color: #0d6efd !important;
+        }
+
+        .authenticated-layout .text-success {
+            color: #198754 !important;
+        }
+
+        .authenticated-layout .text-danger {
+            color: #dc3545 !important;
+        }
+
+        .authenticated-layout .text-warning {
+            color: #ffc107 !important;
+        }
+
+        .authenticated-layout .text-info {
+            color: #0dcaf0 !important;
+        }
+
+        /* Analytics cards - special handling */
+        .analytics-card.bg-primary {
+            background-color: #0d6efd !important;
+            color: #ffffff !important;
+        }
+
+        .analytics-card.bg-success {
+            background-color: #198754 !important;
+            color: #ffffff !important;
+        }
+
+        .analytics-card.bg-danger {
+            background-color: #dc3545 !important;
+            color: #ffffff !important;
+        }
+
+        .analytics-card.bg-info {
+            background-color: #0dcaf0 !important;
+            color: #ffffff !important;
+        }
+
+        .analytics-card .stat-value,
+        .analytics-card .stat-label {
+            color: #ffffff !important;
+        }
+
+        /* Light theme styles for unauthenticated users */
+        .unauthenticated-layout {
+            background-color: #f8f9fa;
+            color: #212529;
+            min-height: calc(100vh - 60px);
+            padding: 20px;
+        }
+
+        .unauthenticated-layout .card {
+            background-color: #ffffff;
+            border: 1px solid #dee2e6;
+            color: #212529;
+        }
+
+        .unauthenticated-layout .card-header {
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+            color: #212529;
+        }
+
+        /* Ensure all text in authenticated layout is visible */
+        .authenticated-layout h1,
+        .authenticated-layout h2,
+        .authenticated-layout h3,
+        .authenticated-layout h4,
+        .authenticated-layout h5,
+        .authenticated-layout h6,
+        .authenticated-layout p,
+        .authenticated-layout span,
+        .authenticated-layout div,
+        .authenticated-layout td,
+        .authenticated-layout th,
+        .authenticated-layout li {
+            color: inherit;
+        }
+
+        /* Fix for any remaining white text issues */
+        .authenticated-layout * {
+            color: inherit;
+        }
+
+        /* Override any white text */
+        .authenticated-layout .text-white {
+            color: #ffffff !important;
+        }
+
+        /* Ensure dropdown menus work properly */
+        .authenticated-layout .dropdown-menu {
+            background-color: #ffffff;
+            color: #212529;
+            border: 1px solid #dee2e6;
+        }
+
+        .authenticated-layout .dropdown-item {
+            color: #212529;
+        }
+
+        .authenticated-layout .dropdown-item:hover {
+            background-color: #f8f9fa;
+            color: #212529;
+        }
+
+        /* Modal styles for authenticated users */
+        .authenticated-layout .modal-content {
+            background-color: #495057;
+            color: #ffffff;
+        }
+
+        .authenticated-layout .modal-header {
+            background-color: #6c757d;
+            color: #ffffff;
+            border-bottom: 1px solid #adb5bd;
+        }
+
+        .authenticated-layout .modal-title {
+            color: #ffffff;
+        }
+
+        .authenticated-layout .modal-body {
+            color: #ffffff;
+        }
+
+        .authenticated-layout .modal-footer {
+            border-top: 1px solid #adb5bd;
+        }
+    </style>
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <!-- White top navbar -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-white">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{% url 'home' %}">
+                <img src="{% static 'img/logo.png' %}" alt="T.A. Knox Logo" height="40" style="max-height: 40px;">
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
+                    aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <!-- Authentication links -->
+                <ul class="navbar-nav ms-auto">
+                    {% if user.is_authenticated %}
+                        <li class="nav-item">
+                            <span class="nav-link text-dark">Welcome, {{ user.username }}</span>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link text-dark" href="{% url 'accounts:logout' %}">
+                                <i class="bi bi-box-arrow-right"></i> Logout
+                            </a>
+                        </li>
+                    {% else %}
+                        <li class="nav-item">
+                            <a class="nav-link text-dark" href="{% url 'accounts:login' %}">
+                                <i class="bi bi-box-arrow-in-right"></i> Login
+                            </a>
+                        </li>
+                    {% endif %}
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main content area -->
+    {% if user.is_authenticated %}
+    <!-- Authenticated layout with sidebar and dark theme -->
+    <div class="authenticated-layout">
+        <div class="container-fluid">
+            <div class="row">
+                <!-- Dark sidebar for authenticated users -->
+                <nav class="col-md-3 col-lg-2 d-md-block sidebar">
+                    <div class="position-sticky pt-3">
+                        <ul class="nav flex-column">
+                            <li class="nav-item">
+                                <a class="nav-link" href="{% url 'home' %}">
+                                    <i class="bi bi-graph-up"></i> Analytics
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" href="{% url 'subcontractors:list' %}">
+                                    <i class="bi bi-people"></i> Subcontractors
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" href="{% url 'projects:list' %}">
+                                    <i class="bi bi-folder"></i> Projects
+                                </a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" href="{% url 'project_tracker:list' %}">
+                                    <i class="bi bi-kanban"></i> Tender Tracker
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                </nav>
+
+                <!-- Main content area with dark theme -->
+                <main class="col-md-9 ms-sm-auto col-lg-10 main-content">
+                    {% if messages %}
+                        {% for message in messages %}
+                            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                                {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+
+                    {% block content %}{% endblock %}
+                </main>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <!-- Light theme content area for login/signup pages -->
+    <main class="unauthenticated-layout">
+        <div class="container">
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        </div>
+    </main>
+    {% endif %}
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

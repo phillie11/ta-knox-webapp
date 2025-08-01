@@ -1,0 +1,2868 @@
+# tenders/views.py - Fixed version without import conflicts
+import logging
+import base64
+import json
+import os
+import zipfile
+import requests
+import threading
+import io
+import tempfile
+import urllib.parse
+import traceback
+import time
+from django.core.cache import cache
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST, require_http_methods, require_GET
+from django.views.generic import ListView, DetailView, FormView, TemplateView
+from .models import AIConversation, AIQuestion
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse, reverse_lazy
+from django.contrib import messages
+from django.core.signing import Signer, BadSignature, SignatureExpired
+from django.utils import timezone
+from django.http import HttpResponse, HttpResponseNotFound, FileResponse, JsonResponse
+from django.db import models
+from django.utils.decorators import method_decorator
+from django.contrib.auth.decorators import login_required
+from django.db.models import Avg, Count, Q, Case, When, IntegerField, F, FloatField
+from urllib.parse import unquote
+from django.views import View
+from .services.ai_analysis import TenderAIAnalyzer
+from .services.rfi_generator import IntelligentRFIGenerator
+
+# Import models (but NOT any view classes from models)
+from .models import (
+    TenderInvitation, TenderDocument, TenderAddendum, TenderAnalysis,
+    TenderQuestion, RFIItem, DocumentQuestion, AIConversation, AIQuestion
+)
+
+# Import forms
+try:
+    from .forms import TenderInvitationForm, AddendumForm
+except ImportError:
+    # Create basic fallback forms if they don't exist
+    from django import forms
+    class TenderInvitationForm(forms.Form):
+        pass
+    class AddendumForm(forms.Form):
+        pass
+
+# Import related models
+from projects.models import Project
+from subcontractors.models import Subcontractor, Trade
+
+# Import communication services
+try:
+    from communications.models import EmailLog
+    from communications.services import OutlookEmailService
+except ImportError:
+    EmailLog = None
+    OutlookEmailService = None
+
+logger = logging.getLogger(__name__)
+
+# Add these new view functions
+@csrf_exempt
+@require_POST
+def ask_ai_question_enhanced(request, project_id):
+    """Enhanced AI question endpoint with comprehensive SharePoint document analysis"""
+    try:
+        data = json.loads(request.body)
+        question = data.get('question', '').strip()
+        force_refresh = data.get('force_refresh', False)
+
+        if not question:
+            return JsonResponse({'error': 'Question is required'}, status=400)
+
+        project = get_object_or_404(Project, id=project_id)
+
+        # Check SharePoint configuration
+        if not project.sharepoint_folder_url:
+            return JsonResponse({
+                'success': False,
+                'error': 'No SharePoint folder configured for this project. Please configure SharePoint integration first.'
+            }, status=400)
+
+        # Import and use enhanced responder
+        try:
+            from .services.enhanced_ai_responder import EnhancedAIResponder
+            responder = EnhancedAIResponder()
+
+            response_data = responder.generate_comprehensive_response(
+                project, question, force_refresh=force_refresh
+            )
+
+            return JsonResponse(response_data)
+
+        except ImportError as e:
+            logger.error(f"Enhanced AI responder import failed: {str(e)}")
+            # Fallback to existing basic implementation
+            return ask_ai_question(request, project_id)
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON data'}, status=400)
+    except Exception as e:
+        logger.error(f"Error in enhanced Ask AI: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': f'Analysis failed: {str(e)}'
+        }, status=500)
+
+@login_required
+def clear_project_knowledge_cache(request, project_id):
+    """Clear cached project knowledge to force refresh"""
+    try:
+        project = get_object_or_404(Project, id=project_id)
+        cache_key = f"project_knowledge_{project.id}"
+        cache.delete(cache_key)
+
+        return JsonResponse({
+            'success': True,
+            'message': 'Project knowledge cache cleared successfully'
+        })
+
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+@login_required
+def get_project_knowledge_stats(request, project_id):
+    """Get statistics about project knowledge base"""
+    try:
+        project = get_object_or_404(Project, id=project_id)
+
+        from .services.sharepoint_knowledge_service import SharePointKnowledgeService
+        knowledge_service = SharePointKnowledgeService()
+
+        knowledge_base = knowledge_service.build_project_knowledge_base(project)
+
+        return JsonResponse({
+            'success': True,
+            'stats': knowledge_base['processing_summary'],
+            'categories': list(knowledge_base['documents_by_category'].keys()),
+            'total_content_length': knowledge_base['processing_summary']['total_content_length']
+        })
+
+    except Exception as e:
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+@login_required
+def generate_rfis(request, project_id):
+    """Generate RFI items from analysis"""
+    project = get_object_or_404(Project, id=project_id)
+
+    try:
+        # Check if analysis exists and is complete
+        analysis = TenderAnalysis.objects.get(project=project)
+
+        if analysis.analysis_confidence < 50:
+            messages.warning(request, "Analysis confidence is low. Consider regenerating analysis before creating RFIs.")
+
+        # Generate RFIs
+        generator = IntelligentRFIGenerator()
+        result = generator.generate_comprehensive_rfis(analysis, created_by=request.user.username)
+
+        if result['success']:
+            messages.success(request, result['message'])
+
+            # Show category breakdown
+            categories = result.get('categories', {})
+            if categories:
+                category_text = ', '.join([f"{cat}: {count}" for cat, count in categories.items()])
+                messages.info(request, f"RFIs generated by category: {category_text}")
+        else:
+            messages.error(request, result['message'])
+
+    except TenderAnalysis.DoesNotExist:
+        messages.error(request, "No analysis found for this project. Please generate analysis first.")
+    except Exception as e:
+        logger.exception(f"Error generating RFIs for project {project_id}")
+        messages.error(request, f"Error generating RFIs: {str(e)}")
+
+    return redirect('tenders:rfi_list', project_id=project_id)
+
+@login_required
+def rfi_list(request, project_id):
+    """Display RFI list for project"""
+    project = get_object_or_404(Project, id=project_id)
+
+    # Check if analysis exists
+    try:
+        analysis = TenderAnalysis.objects.get(project=project)
+    except TenderAnalysis.DoesNotExist:
+        analysis = None
+
+    # Get RFI items
+    rfis = RFIItem.objects.filter(project=project).order_by('priority', 'category', 'created_at')
+
+    # Statistics
+    stats = {
+        'total': rfis.count(),
+        'pending': rfis.filter(status='PENDING').count(),
+        'submitted': rfis.filter(status='SUBMITTED').count(),
+        'responded': rfis.filter(status='RESPONDED').count(),
+        'resolved': rfis.filter(status='CLARIFIED').count(),
+    }
+
+    # Category breakdown
+    categories = {}
+    for rfi in rfis:
+        cat = rfi.get_category_display()
+        categories[cat] = categories.get(cat, 0) + 1
+
+    context = {
+        'project': project,
+        'analysis': analysis,
+        'rfis': rfis,
+        'stats': stats,
+        'categories': categories,
+        'can_generate': analysis is not None and rfis.count() == 0
+    }
+
+    return render(request, 'tenders/rfi_list.html', context)
+
+@login_required
+def rfi_detail(request, project_id, rfi_id):
+    """RFI detail and update view"""
+    project = get_object_or_404(Project, id=project_id)
+    rfi = get_object_or_404(RFIItem, id=rfi_id, project=project)
+
+    if request.method == 'POST':
+        # Update RFI
+        rfi.client_response = request.POST.get('client_response', rfi.client_response)
+        rfi.internal_notes = request.POST.get('internal_notes', rfi.internal_notes)
+        rfi.status = request.POST.get('status', rfi.status)
+
+        if rfi.status == 'RESPONDED' and not rfi.responded_at:
+            rfi.responded_at = timezone.now()
+        elif rfi.status == 'CLARIFIED' and not rfi.resolved_at:
+            rfi.resolved_at = timezone.now()
+
+        rfi.save()
+        messages.success(request, f"RFI {rfi.rfi_number} updated successfully")
+        return redirect('tenders:rfi_detail', project_id=project_id, rfi_id=rfi_id)
+
+    context = {
+        'project': project,
+        'rfi': rfi
+    }
+
+    return render(request, 'tenders/rfi_detail.html', context)
+
+@login_required
+def regenerate_rfis(request, project_id):
+    """Regenerate RFIs for project"""
+    if request.method != 'POST':
+        return redirect('tenders:rfi_list', project_id=project_id)
+
+    project = get_object_or_404(Project, id=project_id)
+
+    try:
+        analysis = TenderAnalysis.objects.get(project=project)
+        generator = IntelligentRFIGenerator()
+        result = generator.regenerate_rfis(analysis, created_by=request.user.username)
+
+        if result['success']:
+            messages.success(request, f"Successfully regenerated {result['rfi_count']} RFI items")
+        else:
+            messages.error(request, result['message'])
+
+    except TenderAnalysis.DoesNotExist:
+        messages.error(request, "No analysis found. Please generate analysis first.")
+    except Exception as e:
+        logger.exception(f"Error regenerating RFIs for project {project_id}")
+        messages.error(request, f"Error regenerating RFIs: {str(e)}")
+
+    return redirect('tenders:rfi_list', project_id=project_id)
+
+def get_ai_analyzer():
+    """Get TenderAIAnalyzer with proper error handling"""
+    try:
+        from .services.ai_analysis import TenderAIAnalyzer
+        analyzer = TenderAIAnalyzer()
+
+        # Test if the analyzer is properly initialized
+        if hasattr(analyzer, 'claude_service') and analyzer.claude_service:
+            logger.info("TenderAIAnalyzer initialized successfully")
+            return analyzer
+        else:
+            logger.warning("TenderAIAnalyzer created but Claude service not available")
+            return analyzer  # Return even if Claude not available - may have fallback
+
+    except ImportError as e:
+        logger.error(f"Failed to import TenderAIAnalyzer: {str(e)}")
+        return None
+    except Exception as e:
+        logger.error(f"Error creating TenderAIAnalyzer: {str(e)}")
+        return None
+
+# Temporary placeholder views - add these to tenders/views.py
+
+@login_required
+def enhanced_ask_ai_question_with_analysis(request, project_id):
+    """Placeholder for enhanced ask AI with analysis"""
+    return JsonResponse({
+        'success': False,
+        'error': 'This feature is still being implemented'
+    })
+
+@login_required
+def start_file_format_analysis(request, project_id):
+    """Placeholder for file analysis"""
+    return JsonResponse({
+        'success': False,
+        'error': 'File analysis feature is still being implemented'
+    })
+
+@login_required
+def get_analysis_progress(request, project_id):
+    """Placeholder for progress tracking"""
+    return JsonResponse({
+        'success': False,
+        'error': 'Progress tracking is still being implemented'
+    })
+
+@login_required
+def get_file_analysis_results(request, project_id):
+    """Placeholder for file results"""
+    return JsonResponse({
+        'success': False,
+        'error': 'File analysis results not available'
+    })
+
+def get_document_question_answerer():
+    """Get DocumentQuestionAnswerer with proper error handling"""
+    try:
+        from .services.ai_analysis import DocumentQuestionAnswerer
+        answerer = DocumentQuestionAnswerer()
+
+        # Check if the answerer has a working Claude service
+        if hasattr(answerer, 'claude_service'):
+            if hasattr(answerer.claude_service, 'claude_available') and answerer.claude_service.claude_available:
+                logger.info("DocumentQuestionAnswerer initialized with Claude AI")
+                return answerer
+            else:
+                logger.warning("DocumentQuestionAnswerer created but Claude AI not available")
+                # Still return it - it may have fallback capabilities
+                return answerer
+        else:
+            logger.warning("DocumentQuestionAnswerer created but no claude_service attribute")
+            return answerer
+
+    except ImportError as e:
+        logger.error(f"Failed to import DocumentQuestionAnswerer: {str(e)}")
+        return None
+    except Exception as e:
+        logger.error(f"Error creating DocumentQuestionAnswerer: {str(e)}")
+        return None
+
+def test_ai_services():
+    """Test function to check AI service availability"""
+    results = {
+        'analyzer_available': False,
+        'answerer_available': False,
+        'claude_configured': False,
+        'errors': []
+    }
+
+    # Test analyzer
+    analyzer = get_ai_analyzer()
+    if analyzer:
+        results['analyzer_available'] = True
+        if hasattr(analyzer, 'claude_service') and hasattr(analyzer.claude_service, 'claude_available'):
+            results['claude_configured'] = analyzer.claude_service.claude_available
+    else:
+        results['errors'].append("TenderAIAnalyzer not available")
+
+    # Test answerer
+    answerer = get_document_question_answerer()
+    if answerer:
+        results['answerer_available'] = True
+    else:
+        results['errors'].append("DocumentQuestionAnswerer not available")
+
+    return results
+
+# Alternative fallback function for when AI services aren't available
+def get_fallback_answer(question: str, project_name: str) -> dict:
+    """Provide fallback answer when AI services aren't available"""
+    return {
+        'success': True,
+        'answer': f"I'm sorry, but the AI analysis service is currently unavailable. "
+                 f"Your question about '{question}' for project '{project_name}' has been noted. "
+                 f"Please try again later or contact your system administrator.",
+        'confidence': 0,
+        'sources': [],
+        'quotes': []
+    }
+
+class TrackResponseView(View):
+    """
+    SIMPLE: Track yes/no responses without showing web pages
+    """
+    def get(self, request, token):
+        try:
+            # Decode token to get invitation ID
+            signer = Signer()
+            invitation_id = signer.unsign(token)
+
+            invitation = get_object_or_404(TenderInvitation, id=invitation_id)
+            response = request.GET.get('response', '').lower()
+
+            if response not in ['yes', 'no']:
+                logger.error(f"Invalid response: {response}")
+                return HttpResponse("Invalid response", status=400)
+
+            # Update invitation status
+            if response == 'yes':
+                invitation.status = 'ACCEPTED'
+                message = f"✓ Thank you! {invitation.subcontractor.company} will tender for {invitation.project.name}"
+                logger.info(f"Response YES: {invitation.subcontractor.company} - {invitation.project.name}")
+            else:  # response == 'no'
+                invitation.status = 'DECLINED'
+                message = f"Thank you for letting us know. {invitation.subcontractor.company} will not tender for {invitation.project.name}"
+                logger.info(f"Response NO: {invitation.subcontractor.company} - {invitation.project.name}")
+
+            # Set response date and save
+            invitation.response_date = timezone.now()
+            invitation.save(update_fields=['status', 'response_date'])
+
+            # Log the response
+            if EmailLog:
+                EmailLog.objects.create(
+                    project=invitation.project,
+                    subcontractor=invitation.subcontractor,
+                    email_type='RESPONSE',
+                    subject=f"Response: {response.upper()} - {invitation.project.name}",
+                    body=f"Subcontractor responded: {response.upper()}"
+                )
+
+            # Return simple success page
+            success_color = "#28a745" if response == 'yes' else "#6c757d"
+            icon = "✓" if response == 'yes' else "ℹ"
+
+            html_response = f"""
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Response Recorded - {invitation.project.name}</title>
+                <style>
+                    body {{
+                        font-family: Arial, sans-serif;
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        margin: 0;
+                        padding: 20px;
+                        min-height: 100vh;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    }}
+                    .container {{
+                        background: white;
+                        padding: 40px;
+                        border-radius: 15px;
+                        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+                        text-align: center;
+                        max-width: 500px;
+                        width: 100%;
+                    }}
+                    .icon {{
+                        font-size: 60px;
+                        color: {success_color};
+                        margin-bottom: 20px;
+                    }}
+                    h1 {{
+                        color: #333;
+                        margin-bottom: 20px;
+                    }}
+                    .message {{
+                        font-size: 18px;
+                        color: #666;
+                        line-height: 1.5;
+                        margin-bottom: 30px;
+                    }}
+                    .project-info {{
+                        background: #f8f9fa;
+                        padding: 20px;
+                        border-radius: 8px;
+                        margin-bottom: 20px;
+                    }}
+                    .footer {{
+                        font-size: 12px;
+                        color: #999;
+                        margin-top: 30px;
+                    }}
+                    .logo {{
+                        max-width: 200px;
+                        height: auto;
+                        margin-bottom: 20px;
+                    }}
+                </style>
+                <script>
+                    // Auto-close after 10 seconds
+                    setTimeout(function() {{
+                        window.close();
+                    }}, 10000);
+                </script>
+            </head>
+            <body>
+                <div class="container">
+                    <img src="https://www.taknox.co.uk/wp-content/uploads/2020/09/taknox-logo.png" alt="TA Knox Logo" class="logo">
+
+                    <div class="icon">{icon}</div>
+
+                    <h1>Response Recorded</h1>
+
+                    <div class="project-info">
+                        <strong>Project:</strong> {invitation.project.name}<br>
+                        <strong>Company:</strong> {invitation.subcontractor.company}
+                    </div>
+
+                    <div class="message">
+                        {message}
+                    </div>
+
+                    <div class="footer">
+                        This window will close automatically in 10 seconds.<br>
+                        <strong>TA Knox Ltd</strong> - Estimating Department
+                    </div>
+                </div>
+            </body>
+            </html>
+            """
+
+            return HttpResponse(html_response)
+
+        except (BadSignature, SignatureExpired) as e:
+            logger.error(f"Invalid token: {token} - {str(e)}")
+            return HttpResponse("Invalid or expired link", status=403)
+        except Exception as e:
+            logger.exception(f"Error tracking response: {str(e)}")
+            return HttpResponse("Error processing response", status=500)
+
+
+class TrackDownloadView(View):
+    """
+    SIMPLE: Track SharePoint document downloads and mark documents as downloaded
+    """
+    def get(self, request, token):
+        try:
+            # Decode token to get invitation ID
+            signer = Signer()
+            invitation_id = signer.unsign(token)
+
+            invitation = get_object_or_404(TenderInvitation, id=invitation_id)
+            sharepoint_url = request.GET.get('url', '')
+
+            if not sharepoint_url:
+                logger.error("No SharePoint URL provided")
+                return HttpResponse("Invalid download link", status=400)
+
+            # Decode the SharePoint URL
+            sharepoint_url = unquote(sharepoint_url)
+
+            # FIXED: Mark documents as downloaded in tender tracking
+            invitation.documents_downloaded = True
+            invitation.documents_downloaded_at = timezone.now()
+            invitation.save(update_fields=['documents_downloaded', 'documents_downloaded_at'])
+
+            logger.info(f"Document download tracked: {invitation.subcontractor.company} - {invitation.project.name}")
+            logger.info(f"SharePoint URL: {sharepoint_url}")
+
+            # Log the download
+            if EmailLog:
+                EmailLog.objects.create(
+                    project=invitation.project,
+                    subcontractor=invitation.subcontractor,
+                    email_type='DOWNLOAD',
+                    subject=f"Documents Downloaded - {invitation.project.name}",
+                    body=f"SharePoint documents accessed by {invitation.subcontractor.company}"
+                )
+
+            # Redirect to the actual SharePoint URL
+            return redirect(sharepoint_url)
+
+        except (BadSignature, SignatureExpired) as e:
+            logger.error(f"Invalid token: {token} - {str(e)}")
+            return HttpResponse("Invalid or expired download link", status=403)
+        except Exception as e:
+            logger.exception(f"Error tracking download: {str(e)}")
+            # Still redirect to SharePoint even if tracking fails
+            sharepoint_url = request.GET.get('url', '')
+            if sharepoint_url:
+                return redirect(unquote(sharepoint_url))
+            return HttpResponse("Error processing download", status=500)
+
+class TenderListView(LoginRequiredMixin, ListView):
+    """List view for tender projects"""
+    model = Project
+    template_name = 'tenders/list.html'
+    context_object_name = 'projects'
+    paginate_by = 10
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        view_type = self.request.GET.get('view', 'tenders')
+
+        if view_type == 'tenders':
+            now = timezone.now()
+            queryset = queryset.exclude(
+                tender_bid_amount__isnull=False,
+                tender_deadline__lt=now
+            )
+
+            queryset = queryset.annotate(
+                invitation_count=models.Count('invitations'),
+                accepted_count=models.Count('invitations', filter=models.Q(invitations__status='ACCEPTED')),
+                declined_count=models.Count('invitations', filter=models.Q(invitations__status='DECLINED')),
+            )
+
+            queryset = queryset.filter(invitation_count__gt=0)
+
+        queryset = queryset.order_by('-created_at')
+        search = self.request.GET.get('search')
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+
+        return queryset
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['view_type'] = self.request.GET.get('view', 'tenders')
+        return context
+
+
+class TenderTrackingView(LoginRequiredMixin, DetailView):
+    """Track tender invitations for a project"""
+    model = Project
+    template_name = 'tenders/tender_tracking.html'
+    context_object_name = 'project'
+    pk_url_kwarg = 'project_id'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = self.get_object()
+
+        invitations = project.invitations.all().select_related('subcontractor', 'subcontractor__trade')
+
+        # Basic statistics
+        stats = {
+            'total': invitations.count(),
+            'pending': invitations.filter(status='PENDING').count(),
+            'accepted': invitations.filter(status='ACCEPTED').count(),
+            'declined': invitations.filter(status='DECLINED').count(),
+            'returned': invitations.filter(tender_returned=True).count(),
+        }
+
+        trades_stats = Trade.objects.filter(
+            subcontractors__tender_invitations__project=project
+        ).annotate(
+            total=Count('subcontractors__tender_invitations'),
+            returned=Count(
+                Case(
+                    When(subcontractors__tender_invitations__tender_returned=True, then=1),
+                    output_field=IntegerField(),
+                )
+            )
+        ).filter(total__gt=0).order_by('name')
+
+        # Calculate return rate for each trade
+        for trade in trades_stats:
+            if trade.total > 0:
+                trade.return_rate = round((trade.returned / trade.total) * 100, 1)
+            else:
+                trade.return_rate = 0
+
+        context['invitations'] = invitations
+        context['stats'] = stats
+        context['trades_stats'] = trades_stats
+        return context
+
+
+class TenderAnalysisView(LoginRequiredMixin, DetailView):
+    """Enhanced display of comprehensive tender analysis"""
+    model = Project
+    template_name = 'tenders/analysis_detail.html'
+    context_object_name = 'project'
+    pk_url_kwarg = 'project_id'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = self.get_object()
+
+        try:
+            analysis = TenderAnalysis.objects.get(project=project)
+            context['analysis'] = analysis
+
+            # Enhanced context data for comprehensive display
+            context['analysis_meta'] = {
+                'confidence': analysis.analysis_confidence,
+                'documents_count': len(analysis.documents_analyzed) if analysis.documents_analyzed else 0,
+                'analysis_method': getattr(analysis, 'analysis_method', 'Standard Analysis'),
+                'risk_level': analysis.risk_level,
+                'duration_weeks': analysis.project_duration_weeks
+            }
+
+            # Extract trade requirements if available as structured data
+            if hasattr(analysis, 'technical_specifications') and isinstance(analysis.technical_specifications, dict):
+                context['trade_requirements'] = analysis.technical_specifications.get('trade_requirements', [])
+            else:
+                context['trade_requirements'] = []
+
+            # Extract risk details if available
+            if hasattr(analysis, 'technical_specifications') and isinstance(analysis.technical_specifications, dict):
+                risk_details = analysis.technical_specifications.get('risk_assessment', {})
+                if isinstance(risk_details, dict):
+                    context['risk_details'] = risk_details
+                else:
+                    context['risk_details'] = {}
+            else:
+                context['risk_details'] = {}
+
+            # Extract timeline details
+            if hasattr(analysis, 'technical_specifications') and isinstance(analysis.technical_specifications, dict):
+                timeline_details = analysis.technical_specifications.get('timeline_analysis', {})
+                if isinstance(timeline_details, dict):
+                    context['timeline_details'] = timeline_details
+                else:
+                    context['timeline_details'] = {}
+            else:
+                context['timeline_details'] = {}
+
+            # Extract direct appointments
+            if hasattr(analysis, 'technical_specifications') and isinstance(analysis.technical_specifications, dict):
+                direct_appointments = analysis.technical_specifications.get('direct_appointments', {})
+                if isinstance(direct_appointments, dict):
+                    context['direct_appointments'] = direct_appointments
+                else:
+                    context['direct_appointments'] = {}
+            else:
+                context['direct_appointments'] = {}
+
+            # Get unanswered questions
+            unanswered_questions = TenderQuestion.objects.filter(
+                project=project,
+                is_answered=False
+            ).order_by('-created_at')
+
+            context['unanswered_questions'] = unanswered_questions
+
+            # Get recommendations if they exist
+            try:
+                from .models import SubcontractorRecommendation
+                recommendations = SubcontractorRecommendation.objects.filter(
+                    tender_analysis=analysis
+                ).order_by('-priority', 'trade_category')
+                context['recommendations'] = recommendations
+            except ImportError:
+                context['recommendations'] = []
+
+        except TenderAnalysis.DoesNotExist:
+            context['analysis'] = None
+            context['analysis_meta'] = {}
+            context['trade_requirements'] = []
+            context['risk_details'] = {}
+            context['timeline_details'] = {}
+            context['direct_appointments'] = {}
+            context['unanswered_questions'] = []
+            context['recommendations'] = []
+
+        return context
+
+
+
+class TenderAnalysisDetailView(LoginRequiredMixin, DetailView):
+    """Alternative detailed view for tender analysis - contract focused"""
+    model = Project
+    template_name = 'tenders/contract_analysis.html'
+    context_object_name = 'project'
+    pk_url_kwarg = 'project_id'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = self.get_object()
+
+        try:
+            analysis = TenderAnalysis.objects.get(project=project)
+            context['analysis'] = analysis
+
+            # Get RFI items if they exist
+            try:
+                rfi_items = RFIItem.objects.filter(project=project).order_by('category', 'priority')
+                context['rfi_items'] = rfi_items
+            except:
+                context['rfi_items'] = []
+
+            # Get document questions if they exist
+            try:
+                doc_questions = DocumentQuestion.objects.filter(project=project).order_by('-created_at')
+                context['doc_questions'] = doc_questions
+            except:
+                context['doc_questions'] = []
+
+        except TenderAnalysis.DoesNotExist:
+            context['analysis'] = None
+            context['rfi_items'] = []
+            context['doc_questions'] = []
+
+        return context
+
+# ADD this new function to your tenders/views.py
+
+@login_required
+@require_POST  # Add this import: from django.views.decorators.http import require_POST
+def ajax_file_format_analysis(request, project_id):
+    """AJAX endpoint for file format preview"""
+    project = get_object_or_404(Project, id=project_id)
+
+    try:
+        if not project.sharepoint_folder_url:
+            return JsonResponse({'error': 'No SharePoint URL'}, status=400)
+
+        # Quick file format scan
+        analyzer = TenderAIAnalyzer()
+        documents = analyzer.sharepoint_service.get_folder_documents_recursive(
+            project.sharepoint_folder_url, max_depth=1
+        )
+
+        file_analysis = analyzer.file_detector.analyze_folder_formats(documents)
+
+        return JsonResponse({
+            'success': True,
+            'file_analysis': file_analysis,
+            'total_documents': len(documents)
+        })
+
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+# MODIFY your existing GenerateAnalysisView in tenders/views.py
+
+class GenerateAnalysisView(LoginRequiredMixin, View):
+    """Enhanced Generate AI analysis view with comprehensive error handling"""
+
+    def get(self, request, project_id):
+        """GET request shows analysis preview"""
+        project = get_object_or_404(Project, id=project_id)
+
+        try:
+            analyzer = TenderAIAnalyzer()
+
+            # Get current analysis status
+            status = analyzer.get_analysis_status(project)
+
+            # Get preview of what would be analyzed
+            preview = analyzer.preview_analysis_scope(project, max_depth=4)
+
+            context = {
+                'project': project,
+                'analysis_status': status,
+                'analysis_preview': preview,
+                'can_analyze': preview.get('success', False)
+            }
+
+            return render(request, 'tenders/generate_analysis.html', context)
+
+        except Exception as e:
+            logger.exception(f"Error in analysis preview: {str(e)}")
+            messages.error(request, f"Error loading analysis preview: {str(e)}")
+            return redirect('projects:detail', pk=project_id)
+
+    def post(self, request, project_id):
+        """POST request runs the actual analysis"""
+        project = get_object_or_404(Project, id=project_id)
+
+        try:
+            # Initialize enhanced analyzer
+            analyzer = TenderAIAnalyzer()
+
+            # Step 1: Validate prerequisites
+            logger.info(f"Validating analysis prerequisites for project: {project.name}")
+            validation = analyzer.validate_analysis_prerequisites(project)
+
+            if not validation['is_valid']:
+                error_msg = '; '.join(validation['errors'])
+                logger.error(f"Analysis validation failed: {error_msg}")
+                messages.error(request, f"❌ Analysis cannot proceed: {error_msg}")
+                return redirect('projects:detail', pk=project.id)
+
+            # Show warnings if any
+            for warning in validation['warnings']:
+                messages.warning(request, f"⚠️ {warning}")
+
+            # Step 2: Get analysis options
+            recursive = request.POST.get('recursive', 'true').lower() == 'true'
+            max_depth = 4 if recursive else 1
+            scan_type = "all folders and subfolders (4 levels deep)" if recursive else "main folder only"
+
+            logger.info(f"Starting enhanced analysis - Recursive: {recursive}, Max depth: {max_depth}")
+
+            # Step 3: Run ENHANCED comprehensive analysis
+            if recursive:
+                analysis = analyzer.analyze_project_sharepoint_folder_recursive_enhanced(project, max_depth=4)
+            else:
+                analysis = analyzer.analyze_project_comprehensive(project, max_depth=4)
+
+            # Step 4: Extract results and show success
+            doc_count = len(analysis.documents_analyzed) if analysis.documents_analyzed else 0
+            confidence = analysis.analysis_confidence
+            risk_level = analysis.risk_level
+
+            logger.info(f"Enhanced analysis completed - Documents: {doc_count}, Confidence: {confidence}%, Risk: {risk_level}")
+
+            # Create detailed success message
+            success_message = (
+                f"🎉 Enhanced Analysis Complete!\n"
+                f"📄 {doc_count} documents analyzed with comprehensive insights\n"
+                f"📊 Confidence: {confidence}%\n"
+                f"⚠️ Risk Level: {risk_level}\n"
+                f"🔍 Scope: {scan_type}"
+            )
+
+            messages.success(request, success_message)
+
+            return redirect('tenders:analysis', project_id=project.id)
+
+        except ValueError as e:
+            # Specific validation or data errors - these are user-facing
+            error_msg = str(e)
+            logger.warning(f"Analysis validation error for project {project.name}: {error_msg}")
+            messages.error(request, f"❌ Analysis Error: {error_msg}")
+            return redirect('projects:detail', pk=project.id)
+
+        except Exception as e:
+            # Unexpected system errors
+            logger.exception(f"Unexpected error in enhanced analysis for project {project.name}: {str(e)}")
+            messages.error(request,
+                f"❌ System Error: Analysis failed due to an unexpected error. "
+                f"Error details: {str(e)[:100]}... "
+                f"Please contact support if this persists."
+            )
+            return redirect('projects:detail', pk=project.id)
+
+# Add these new AJAX endpoints to your views.py
+
+@login_required
+@require_POST
+def ajax_analysis_preview(request, project_id):
+    """AJAX endpoint to preview analysis scope before running"""
+    project = get_object_or_404(Project, id=project_id)
+
+    try:
+        analyzer = TenderAIAnalyzer()
+        recursive = request.POST.get('recursive', 'true').lower() == 'true'
+        max_depth = 4 if recursive else 1
+
+        # Get preview without running full analysis
+        preview = analyzer.preview_analysis_scope(project, max_depth)
+
+        if preview['success']:
+            response_data = {
+                'success': True,
+                'preview': {
+                    'total_documents': preview['total_documents'],
+                    'file_types': preview['file_types'],
+                    'estimated_time': preview['estimated_analysis_time'],
+                    'scope': preview['analysis_scope'],
+                    'document_sample': preview['document_sample']
+                }
+            }
+        else:
+            response_data = {
+                'success': False,
+                'error': preview['error']
+            }
+
+        return JsonResponse(response_data)
+
+    except Exception as e:
+        logger.exception(f"Error in analysis preview for project {project_id}: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': f'Preview failed: {str(e)}'
+        }, status=500)
+
+@login_required
+@require_GET
+def ajax_analysis_status(request, project_id):
+    """AJAX endpoint to get current analysis status"""
+    project = get_object_or_404(Project, id=project_id)
+
+    try:
+        analyzer = TenderAIAnalyzer()
+        status = analyzer.get_analysis_status(project)
+
+        return JsonResponse({
+            'success': True,
+            'status': status
+        })
+
+    except Exception as e:
+        logger.exception(f"Error getting analysis status for project {project_id}: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+@login_required
+@require_POST
+def ajax_validate_analysis(request, project_id):
+    """AJAX endpoint to validate analysis prerequisites"""
+    project = get_object_or_404(Project, id=project_id)
+
+    try:
+        analyzer = TenderAIAnalyzer()
+        validation = analyzer.validate_analysis_prerequisites(project)
+
+        return JsonResponse({
+            'success': True,
+            'validation': validation
+        })
+
+    except Exception as e:
+        logger.exception(f"Error validating analysis for project {project_id}: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+@login_required
+@require_GET
+def ajax_export_analysis(request, project_id):
+    """AJAX endpoint to export analysis summary"""
+    project = get_object_or_404(Project, id=project_id)
+
+    try:
+        analyzer = TenderAIAnalyzer()
+        export_data = analyzer.export_analysis_summary(project)
+
+        return JsonResponse(export_data)
+
+    except Exception as e:
+        logger.exception(f"Error exporting analysis for project {project_id}: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+class UpdateAnalysisView(LoginRequiredMixin, FormView):
+    """Update existing analysis with latest SharePoint documents using recursive scanning"""
+
+    def post(self, request, project_id):
+        project = get_object_or_404(Project, id=project_id)
+
+        try:
+            # Check if analysis exists
+            analysis = TenderAnalysis.objects.get(project=project)
+
+            # Check if SharePoint folder is configured (check BOTH fields)
+            sharepoint_url = getattr(project, 'sharepoint_folder_url', None)
+            if not sharepoint_url:
+                sharepoint_url = getattr(project, 'sharepoint_documents_link', None)
+
+            if not sharepoint_url:
+                messages.error(
+                    request,
+                    "No SharePoint folder URL configured. Please edit the project to add the SharePoint folder URL."
+                )
+                return redirect('tenders:analysis', project_id=project.id)
+
+            # Get recursion preference (default to True for full recursive scan)
+            recursive = request.POST.get('recursive', 'true').lower() == 'true'
+            max_depth = 10 if recursive else 1
+
+            # Re-analyze SharePoint folder with recursion
+            analyzer = get_ai_analyzer()
+            if analyzer is None:
+                messages.error(request, "AI analysis service is not available.")
+                return redirect('projects:detail', pk=project.id)
+
+            if recursive:
+                logger.info(f"Updating analysis with RECURSIVE scan (max depth: {max_depth}) for project {project.name}")
+                analysis = analyzer.analyze_project_comprehensive(project, max_depth=4)
+                scan_type = "all folders and subfolders"
+            else:
+                logger.info(f"Updating analysis with SINGLE FOLDER scan for project {project.name}")
+                # FIX: Use the recursive method with depth=1 instead of the broken non-recursive method
+                analysis = analyzer.analyze_project_comprehensive(project, max_depth=4)
+                scan_type = "main folder only"
+
+            doc_count = len(analysis.documents_analyzed) if hasattr(analysis, 'documents_analyzed') else 0
+
+            messages.success(
+                request,
+                f"✅ Analysis updated successfully! Rescanned {scan_type} and processed {doc_count} documents "
+                f"from SharePoint with latest content."
+            )
+
+        except TenderAnalysis.DoesNotExist:
+            messages.error(request, "No existing analysis found. Please generate initial analysis first.")
+        except Exception as e:
+            logger.exception(f"Error updating analysis for project {project_id}")
+            messages.error(request, f"Error updating analysis: {str(e)}")
+
+        return redirect('tenders:analysis', project_id=project.id)
+
+
+class AnalysisComparisonView(LoginRequiredMixin, DetailView):
+    """Compare analysis results across similar projects"""
+    model = Project
+    template_name = 'tenders/analysis_comparison.html'
+    pk_url_kwarg = 'project_id'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = self.get_object()
+
+        try:
+            current_analysis = TenderAnalysis.objects.get(project=project)
+
+            # Find similar projects based on location, value range, etc.
+            similar_analyses = TenderAnalysis.objects.exclude(
+                project=project
+            ).select_related('project')
+
+            # Filter by similar estimated value range if available
+            if hasattr(current_analysis, 'estimated_value_range') and current_analysis.estimated_value_range:
+                current_min = current_analysis.estimated_value_range.get('min', 0)
+                current_max = current_analysis.estimated_value_range.get('max', 0)
+
+                if current_min > 0:
+                    # Find projects within 50% value range
+                    range_min = current_min * 0.5
+                    range_max = current_max * 1.5 if current_max > 0 else current_min * 1.5
+
+                    similar_analyses = similar_analyses.filter(
+                        estimated_value_range__has_keys=['min'],
+                        estimated_value_range__min__gte=range_min,
+                        estimated_value_range__max__lte=range_max
+                    )
+
+            context['current_analysis'] = current_analysis
+            context['similar_analyses'] = similar_analyses[:5]  # Limit to 5 similar projects
+
+        except TenderAnalysis.DoesNotExist:
+            context['current_analysis'] = None
+            context['similar_analyses'] = []
+
+        return context
+
+
+class ExportAnalysisView(LoginRequiredMixin, View):
+    """Export analysis data to various formats"""
+
+    def get(self, request, project_id):
+        project = get_object_or_404(Project, id=project_id)
+        export_format = request.GET.get('format', 'excel')
+
+        try:
+            analysis = TenderAnalysis.objects.get(project=project)
+
+            if export_format == 'excel':
+                # Export to Excel format
+                try:
+                    from .rfi_exporter import RFIExcelExporter
+                    exporter = RFIExcelExporter()
+                    response = exporter.export_analysis(analysis)
+                    return response
+                except ImportError:
+                    messages.error(request, "Excel export not available.")
+                    return redirect('tenders:analysis', project_id=project.id)
+
+            elif export_format == 'json':
+                # Export to JSON format
+                data = {
+                    'project': project.name,
+                    'analysis_date': analysis.analysis_date.isoformat(),
+                }
+
+                # Add available fields
+                for field in ['project_overview', 'key_requirements', 'scope_of_work', 'identified_risks']:
+                    if hasattr(analysis, field):
+                        data[field] = getattr(analysis, field)
+
+                # Add recommendations if they exist
+                data['recommendations'] = []
+
+                response = JsonResponse(data, json_dumps_params={'indent': 2})
+                response['Content-Disposition'] = f'attachment; filename="{project.name}_analysis.json"'
+                return response
+
+        except TenderAnalysis.DoesNotExist:
+            messages.error(request, "No analysis found for this project.")
+            return redirect('projects:detail', pk=project.id)
+        except Exception as e:
+            logger.exception(f"Error exporting analysis for project {project_id}")
+            messages.error(request, f"Error exporting analysis: {str(e)}")
+            return redirect('tenders:analysis', project_id=project.id)
+
+
+
+class SendTenderInvitationView(LoginRequiredMixin, FormView):
+    """Send tender invitations to subcontractors"""
+    template_name = 'tenders/send_invitation.html'
+    form_class = TenderInvitationForm
+
+    def get_success_url(self):
+        return reverse('tenders:tracking', kwargs={'project_id': self.kwargs['project_id']})
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['project_id'] = self.kwargs['project_id']
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = get_object_or_404(Project, id=self.kwargs['project_id'])
+        context['project'] = project
+        context['trades'] = Trade.objects.all().order_by('name')
+
+        form = context.get('form')
+        if not form:
+            form = self.get_form()
+            context['form'] = form
+
+        context['recommendations'] = []
+        return context
+
+    def form_valid(self, form):
+        project = get_object_or_404(Project, id=self.kwargs['project_id'])
+
+        try:
+            invitations_sent = 0
+            invitations_updated = 0
+            error_count = 0
+
+            # Check if email service is available
+            if OutlookEmailService is None:
+                messages.error(self.request, "Email service not available.")
+                return super().form_valid(form)
+
+            # Get SharePoint link from form
+            form_sharepoint_link = form.cleaned_data.get('sharepoint_link', '').strip()
+            logger.info(f"🔗 SharePoint link from form: '{form_sharepoint_link}'")
+
+            email_service = OutlookEmailService()
+
+            for subcontractor in form.cleaned_data['subcontractors']:
+                try:
+                    # Use get_or_create to prevent UNIQUE constraint violations
+                    invitation, created = TenderInvitation.objects.get_or_create(
+                        project=project,
+                        subcontractor=subcontractor,
+                        defaults={
+                            'status': 'PENDING',
+                            'sent_by': self.request.user.username,
+                            'custom_message': form.cleaned_data.get('message', ''),
+                            'deadline': form.cleaned_data.get('deadline'),
+                            'sent_at': timezone.now(),
+                        }
+                    )
+
+                    if created:
+                        # Generate tracking token for new invitation
+                        tracking_token = self._generate_tracking_token(invitation.id)
+                        tracking_url = self.request.build_absolute_uri(
+                            reverse('tenders:track_email', kwargs={'token': tracking_token})
+                        )
+
+                        # Add SharePoint link to invitation object for email service
+                        if form_sharepoint_link:
+                            invitation._form_sharepoint_link = form_sharepoint_link
+                            invitation._form_sharepoint_description = "ITT Documents"
+                            logger.info(f"✅ Added form SharePoint link to invitation: {form_sharepoint_link}")
+
+                        # ✅ CORRECT: Send initial tender invitation (NOT a reminder)
+                        success = email_service.send_tender_invitation(invitation)
+
+                        if success:
+                            invitation.email_sent = timezone.now()
+                            invitation.save()
+                            invitations_sent += 1
+                            logger.info(f"✅ Invitation sent to {subcontractor.company}")
+                        else:
+                            error_count += 1
+                            logger.error(f"❌ Failed to send invitation to {subcontractor.company}")
+
+                    else:
+                        # Invitation already exists - update if needed
+                        needs_update = False
+
+                        if form.cleaned_data.get('message') and invitation.custom_message != form.cleaned_data['message']:
+                            invitation.custom_message = form.cleaned_data['message']
+                            needs_update = True
+
+                        if form.cleaned_data.get('deadline') and invitation.deadline != form.cleaned_data['deadline']:
+                            invitation.deadline = form.cleaned_data['deadline']
+                            needs_update = True
+
+                        if needs_update:
+                            invitation.save()
+                            invitations_updated += 1
+                            logger.info(f"ℹ️ Updated existing invitation for {subcontractor.company}")
+                        else:
+                            logger.info(f"⚠️ Invitation already exists for {subcontractor.company}")
+
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"❌ Error sending to {subcontractor.company}: {str(e)}")
+                    continue
+
+            # Build success message
+            success_parts = []
+            if invitations_sent > 0:
+                success_parts.append(f"sent {invitations_sent} new invitation(s)")
+            if invitations_updated > 0:
+                success_parts.append(f"updated {invitations_updated} existing invitation(s)")
+
+            if success_parts:
+                success_msg = f"Successfully {' and '.join(success_parts)}"
+                if form_sharepoint_link:
+                    success_msg += " SharePoint documents included from form."
+                messages.success(self.request, success_msg)
+
+            if error_count > 0:
+                messages.warning(
+                    self.request,
+                    f"Failed to send {error_count} invitations. Check the logs for details."
+                )
+
+            if invitations_sent == 0 and invitations_updated == 0 and error_count == 0:
+                messages.info(self.request, "All selected subcontractors already have current invitations.")
+
+        except Exception as e:
+            logger.exception("Error sending tender invitations")
+            messages.error(self.request, f"Error sending invitations: {str(e)}")
+
+        return super().form_valid(form)
+
+    def _generate_tracking_token(self, invitation_id):
+        signer = Signer()
+        return signer.sign(str(invitation_id))
+
+class SendAddendumView(LoginRequiredMixin, FormView):
+    """Send addendum to existing tender invitations"""
+    template_name = 'tenders/send_addendum.html'
+    form_class = AddendumForm
+
+    def get_success_url(self):
+        return reverse('tenders:tracking', kwargs={'project_id': self.kwargs['project_id']})
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs['project_id'] = self.kwargs['project_id']
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project = get_object_or_404(Project, id=self.kwargs['project_id'])
+        context['project'] = project
+        context['trades'] = Trade.objects.all().order_by('name')
+        context['existing_documents'] = []
+        return context
+
+    def form_valid(self, form):
+        project = get_object_or_404(Project, id=self.kwargs['project_id'])
+
+        try:
+            # Create addendum record
+            addendum = TenderAddendum.objects.create(
+                project=project,
+                title=form.cleaned_data['subject'],
+                description=form.cleaned_data['message'],
+                sent_by=self.request.user.username,
+                sent_at=timezone.now()
+            )
+
+            # Get SharePoint link from form
+            form_sharepoint_link = form.cleaned_data.get('sharepoint_link', '').strip()
+
+            # UPDATED: Send to ALL invitations except declined
+            eligible_invitations = TenderInvitation.objects.filter(
+                project=project
+            ).exclude(
+                status='DECLINED'  # Exclude only declined invitations
+            )
+
+            logger.info(f"📧 Sending addendum to {eligible_invitations.count()} eligible invitations (excluding declined)")
+
+            if OutlookEmailService:
+                email_service = OutlookEmailService()
+                emails_sent = 0
+                declined_count = 0
+                error_count = 0
+
+                for invitation in eligible_invitations:
+                    try:
+                        # Add form SharePoint link to addendum object if provided
+                        if form_sharepoint_link:
+                            addendum._form_sharepoint_link = form_sharepoint_link
+                            addendum._form_sharepoint_description = "Updated ITT Documents"
+                            logger.info(f"✅ Added form SharePoint link to addendum")
+
+                        # Send addendum email
+                        success = email_service.send_tender_addendum(invitation, addendum)
+
+                        if success:
+                            emails_sent += 1
+                            logger.info(f"✅ Addendum sent to {invitation.subcontractor.company}")
+                        else:
+                            error_count += 1
+                            logger.error(f"❌ Failed to send addendum to {invitation.subcontractor.company}")
+
+                    except Exception as e:
+                        error_count += 1
+                        logger.exception(f"Error sending addendum to {invitation.subcontractor.company}: {str(e)}")
+
+                # Count declined invitations for info message
+                declined_count = TenderInvitation.objects.filter(
+                    project=project,
+                    status='DECLINED'
+                ).count()
+
+                # Show results
+                if emails_sent > 0:
+                    success_msg = f"Addendum sent to {emails_sent} subcontractors"
+                    if declined_count > 0:
+                        success_msg += f" (skipped {declined_count} declined)"
+                    messages.success(self.request, success_msg)
+
+                if error_count > 0:
+                    messages.warning(self.request, f"Failed to send {error_count} addendums")
+
+            else:
+                messages.error(self.request, "Email service not available")
+
+        except Exception as e:
+            logger.exception("Error sending addendum")
+            messages.error(self.request, f"Error sending addendum: {str(e)}")
+
+        return super().form_valid(form)
+
+    def _generate_tracking_token(self, invitation_id):
+        signer = Signer()
+        return signer.sign(str(invitation_id))
+
+@login_required
+def generate_analysis(self, prompt: str) -> str:
+    """Generate analysis from a prompt using Claude AI"""
+    logger.info("Generating analysis from prompt")
+
+    if not self.claude_available or not self.client:
+        return "Claude AI service not available."
+
+    try:
+        response = self.client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=4000,
+            temperature=0.1,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        return response.content[0].text
+
+    except Exception as e:
+        logger.error(f"Error calling Claude AI: {str(e)}")
+        return f"Error generating analysis: {str(e)}"
+
+
+@login_required
+def update_analysis(request, project_id):
+    """Function-based view for updating analysis"""
+    if request.method == 'POST':
+        view = UpdateAnalysisView()
+        view.request = request
+        view.kwargs = {'project_id': project_id}
+        return view.post(request, project_id)
+    else:
+        return redirect('projects:detail', pk=project_id)
+
+
+@login_required
+def export_rfi_schedule(request, project_id):
+    """Export RFI schedule to Excel"""
+    project = get_object_or_404(Project, id=project_id)
+
+    try:
+        from .rfi_exporter import RFIExcelExporter
+        exporter = RFIExcelExporter()
+        try:
+            rfi_items = RFIItem.objects.filter(project=project)
+        except:
+            rfi_items = []
+        response = exporter.export_rfi_items(project, rfi_items)
+        return response
+
+    except ImportError:
+        messages.error(request, "RFI export functionality not available.")
+        return redirect('tenders:analysis', project_id=project_id)
+    except Exception as e:
+        logger.exception(f"Error exporting RFI schedule for project {project_id}")
+        messages.error(request, f"Error exporting RFI schedule: {str(e)}")
+        return redirect('tenders:analysis', project_id=project_id)
+
+
+@login_required
+def export_contract_summary(request, project_id):
+    """Export contract summary to Excel"""
+    project = get_object_or_404(Project, id=project_id)
+
+    try:
+        from .rfi_exporter import ContractSummaryExporter
+        exporter = ContractSummaryExporter()
+        analysis = TenderAnalysis.objects.get(project=project)
+        response = exporter.export_contract_summary(analysis)
+        return response
+
+    except TenderAnalysis.DoesNotExist:
+        messages.error(request, "No analysis found for this project.")
+        return redirect('projects:detail', pk=project.id)
+    except ImportError:
+        messages.error(request, "Contract export functionality not available.")
+        return redirect('tenders:analysis', project_id=project_id)
+    except Exception as e:
+        logger.exception(f"Error exporting contract summary for project {project_id}")
+        messages.error(request, f"Error exporting contract summary: {str(e)}")
+        return redirect('tenders:analysis', project_id=project_id)
+
+@login_required
+def download_documents(request, project_id):
+    """
+    SIMPLIFIED: Direct redirect to SharePoint - no tracking
+    """
+    try:
+        project = get_object_or_404(Project, id=project_id)
+
+        # Direct redirect to SharePoint if available
+        if project.sharepoint_documents_link:
+            logger.info(f"Redirecting to SharePoint: {project.name}")
+            return redirect(project.sharepoint_documents_link)
+        elif hasattr(project, 'sharepoint_folder_url') and project.sharepoint_folder_url:
+            logger.info(f"Redirecting to SharePoint folder: {project.name}")
+            return redirect(project.sharepoint_folder_url)
+        else:
+            messages.warning(request, "No documents available for this project.")
+            return redirect('projects:detail', pk=project_id)
+
+    except Exception as e:
+        logger.exception(f"Error accessing documents for project {project_id}: {str(e)}")
+        messages.error(request, "Unable to access documents. Please try again.")
+        return redirect('projects:detail', pk=project_id)
+
+@csrf_exempt
+@require_POST
+def ask_ai_question(request, project_id):
+    """Ask AI a question about the project documents - with full SharePoint access"""
+    try:
+        data = json.loads(request.body)
+        question = data.get('question', '').strip()
+
+        if not question:
+            return JsonResponse({'error': 'Question is required'}, status=400)
+
+        project = get_object_or_404(Project, id=project_id)
+        logger.info(f"Processing AI question for project {project.name}: {question}")
+
+        # Check if project has SharePoint configuration
+        if not project.sharepoint_folder_url:
+            return JsonResponse({
+                'success': False,
+                'error': 'No SharePoint folder configured for this project. Please configure SharePoint integration first.'
+            }, status=400)
+
+        try:
+            # Use comprehensive document analysis instead of limited stored analysis
+            answer_data = get_comprehensive_ai_answer(project, question)
+
+            return JsonResponse({
+                'success': True,
+                'answer': answer_data.get('answer', 'Unable to generate answer'),
+                'confidence': answer_data.get('confidence', 0),
+                'sources': answer_data.get('sources', []),
+                'document_count': answer_data.get('document_count', 0),
+                'processing_time': answer_data.get('processing_time', 0)
+            })
+
+        except Exception as e:
+            logger.error(f"Error in comprehensive AI analysis: {str(e)}")
+
+            # Fallback to basic analysis if comprehensive fails
+            return get_fallback_ai_answer(project, question)
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON data'}, status=400)
+    except Exception as e:
+        logger.error(f"Error in AI question processing: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': f'Analysis failed: {str(e)}'
+        }, status=500)
+
+def get_comprehensive_ai_answer(project, question):
+    """Get AI answer using full SharePoint document access"""
+    import time
+    from .services.ai_analysis import OptimizedSharePointService, DocumentParser, ClaudeAIService
+
+    start_time = time.time()
+
+    # Initialize services
+    sharepoint_service = OptimizedSharePointService()
+    document_parser = DocumentParser()
+    claude_service = ClaudeAIService()
+
+    logger.info(f"🔍 Fetching documents from SharePoint for: {project.name}")
+
+    # Get all documents from SharePoint folder
+    documents = sharepoint_service.get_folder_documents_recursive_fast(
+        project.sharepoint_folder_url,
+        max_depth=10
+    )
+
+    if not documents:
+        raise ValueError("No documents found in SharePoint folder")
+
+    # Process documents and extract text
+    document_texts = []
+    document_names = []
+    successful_docs = 0
+
+    for doc in documents[:20]:  # Limit to 20 docs for performance
+        try:
+            # Download document content
+            content = sharepoint_service.download_document_content(doc['download_url'])
+
+            if content and content.strip():
+                # Extract text using existing parser
+                text = document_parser.extract_text(
+                    content,
+                    doc.get('mime_type', 'application/octet-stream'),
+                    doc.get('name', '')
+                )
+
+                if text and len(text.strip()) > 50:  # Only include substantial content
+                    document_texts.append(text[:5000])  # Limit text per document
+                    document_names.append(doc.get('name', 'Unknown Document'))
+                    successful_docs += 1
+
+        except Exception as e:
+            logger.warning(f"Failed to process document {doc.get('name', 'unknown')}: {str(e)}")
+            continue
+
+    if not document_texts:
+        raise ValueError("No readable document content found")
+
+    logger.info(f"📄 Successfully processed {successful_docs} documents")
+
+    # Combine document content for AI analysis
+    combined_content = "\n\n".join([
+        f"=== {name} ===\n{text}" for name, text in zip(document_names, document_texts)
+    ])
+
+    # Create comprehensive prompt for Claude
+    ai_prompt = f"""
+    You are analyzing tender documents for the construction project "{project.name}" located in "{project.location}".
+
+    Question: {question}
+
+    Based on the following documents, provide a comprehensive answer:
+
+    {combined_content[:20000]}  # Limit total content for API
+
+    Please provide:
+    1. A direct answer to the question
+    2. Reference the specific documents you used
+    3. Quote relevant sections if applicable
+    4. Indicate your confidence level (1-100)
+
+    Format your response as:
+    ANSWER: [Your detailed answer]
+    CONFIDENCE: [1-100]
+    SOURCES: [List the document names you referenced]
+    QUOTES: [Any relevant quotes from the documents]
+    """
+
+    # Get AI response
+    try:
+        ai_response = claude_service.generate_analysis(ai_prompt)
+        parsed_response = parse_ai_response(ai_response, document_names)
+
+        processing_time = round(time.time() - start_time, 2)
+
+        return {
+            'answer': parsed_response.get('answer', 'Unable to generate answer'),
+            'confidence': parsed_response.get('confidence', 50),
+            'sources': parsed_response.get('sources', []),
+            'quotes': parsed_response.get('quotes', []),
+            'document_count': successful_docs,
+            'processing_time': processing_time
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting AI response: {str(e)}")
+        raise ValueError(f"AI service error: {str(e)}")
+
+
+def parse_ai_response(response, document_names):
+    """Parse structured AI response"""
+    import re
+
+    # Extract sections using regex
+    answer_match = re.search(r'ANSWER:\s*(.+?)(?=CONFIDENCE:|$)', response, re.DOTALL)
+    confidence_match = re.search(r'CONFIDENCE:\s*(\d+)', response)
+    sources_match = re.search(r'SOURCES:\s*(.+?)(?=QUOTES:|$)', response, re.DOTALL)
+    quotes_match = re.search(r'QUOTES:\s*(.+?)$', response, re.DOTALL)
+
+    answer = answer_match.group(1).strip() if answer_match else response
+    confidence = int(confidence_match.group(1)) if confidence_match else 50
+
+    # Parse sources
+    sources = []
+    if sources_match:
+        sources_text = sources_match.group(1).strip()
+        for doc_name in document_names:
+            if doc_name.lower() in sources_text.lower():
+                sources.append(doc_name)
+
+    # Parse quotes
+    quotes = []
+    if quotes_match:
+        quotes_text = quotes_match.group(1).strip()
+        quote_lines = [q.strip() for q in quotes_text.split('\n') if q.strip()]
+        quotes = quote_lines[:3]  # Limit to 3 quotes
+
+    return {
+        'answer': answer,
+        'confidence': confidence,
+        'sources': sources,
+        'quotes': quotes
+    }
+
+
+def get_fallback_ai_answer(project, question):
+    """Fallback when comprehensive analysis fails"""
+    try:
+        analysis = TenderAnalysis.objects.get(project=project)
+
+        # Use stored analysis data as fallback
+        fallback_content = f"""
+        Project: {project.name}
+        Location: {project.location}
+        Analysis Overview: {getattr(analysis, 'project_overview', 'No overview available')}
+        Contract Summary: {getattr(analysis, 'contract_summary', 'No contract summary available')}
+        Key Requirements: {getattr(analysis, 'key_requirements', 'No requirements available')}
+        """
+
+        # Simple keyword-based response for fallback
+        if any(word in question.lower() for word in ['deadline', 'date', 'when']):
+            answer = f"Based on stored analysis, the tender deadline is {project.tender_deadline if project.tender_deadline else 'not specified'}."
+        elif any(word in question.lower() for word in ['location', 'where', 'address']):
+            answer = f"The project is located in {project.location if project.location else 'location not specified'}."
+        elif any(word in question.lower() for word in ['value', 'cost', 'budget', 'price']):
+            answer = f"The tender bid amount is {project.tender_bid_amount if project.tender_bid_amount else 'not specified'}."
+        else:
+            answer = f"I can provide information about {project.name}, but full document analysis is currently unavailable. The stored analysis includes: {getattr(analysis, 'project_overview', 'basic project information')}."
+
+        return JsonResponse({
+            'success': True,
+            'answer': answer,
+            'confidence': 30,
+            'sources': ['Stored Analysis Data'],
+            'document_count': 0,
+            'processing_time': 0.1
+        })
+
+    except TenderAnalysis.DoesNotExist:
+        return JsonResponse({
+            'success': False,
+            'error': 'No analysis data available for this project. Please run analysis first.'
+        }, status=400)
+
+@login_required
+def ai_service_diagnostics(request):
+    """Diagnostic view to check AI service status"""
+    diagnostics = {
+        'django_settings': {},
+        'import_status': {},
+        'service_status': {},
+        'recommendations': []
+    }
+
+    # Check Django settings
+    try:
+        from django.conf import settings
+        diagnostics['django_settings']['CLAUDE_API_KEY'] = bool(getattr(settings, 'CLAUDE_API_KEY', None))
+        diagnostics['django_settings']['claude_key_length'] = len(getattr(settings, 'CLAUDE_API_KEY', '')) if getattr(settings, 'CLAUDE_API_KEY', None) else 0
+    except Exception as e:
+        diagnostics['django_settings']['error'] = str(e)
+
+    # Check imports
+    try:
+        from .services.ai_analysis import TenderAIAnalyzer
+        diagnostics['import_status']['TenderAIAnalyzer'] = True
+    except ImportError as e:
+        diagnostics['import_status']['TenderAIAnalyzer'] = f"Import Error: {str(e)}"
+    except Exception as e:
+        diagnostics['import_status']['TenderAIAnalyzer'] = f"Error: {str(e)}"
+
+    try:
+        from .services.ai_analysis import DocumentQuestionAnswerer
+        diagnostics['import_status']['DocumentQuestionAnswerer'] = True
+    except ImportError as e:
+        diagnostics['import_status']['DocumentQuestionAnswerer'] = f"Import Error: {str(e)}"
+    except Exception as e:
+        diagnostics['import_status']['DocumentQuestionAnswerer'] = f"Error: {str(e)}"
+
+    try:
+        from .services.ai_analysis import ClaudeAIService
+        diagnostics['import_status']['ClaudeAIService'] = True
+    except ImportError as e:
+        diagnostics['import_status']['ClaudeAIService'] = f"Import Error: {str(e)}"
+    except Exception as e:
+        diagnostics['import_status']['ClaudeAIService'] = f"Error: {str(e)}"
+
+    # Check anthropic library
+    try:
+        import anthropic
+        diagnostics['import_status']['anthropic'] = f"Available - version: {getattr(anthropic, '__version__', 'unknown')}"
+    except ImportError:
+        diagnostics['import_status']['anthropic'] = "Not installed"
+    except Exception as e:
+        diagnostics['import_status']['anthropic'] = f"Error: {str(e)}"
+
+    # Test service creation
+    try:
+        analyzer = get_ai_analyzer()
+        if analyzer:
+            diagnostics['service_status']['TenderAIAnalyzer'] = "Created successfully"
+            if hasattr(analyzer, 'claude_service'):
+                if hasattr(analyzer.claude_service, 'claude_available'):
+                    diagnostics['service_status']['claude_in_analyzer'] = analyzer.claude_service.claude_available
+                else:
+                    diagnostics['service_status']['claude_in_analyzer'] = "claude_available attribute missing"
+            else:
+                diagnostics['service_status']['claude_in_analyzer'] = "No claude_service attribute"
+        else:
+            diagnostics['service_status']['TenderAIAnalyzer'] = "Failed to create"
+    except Exception as e:
+        diagnostics['service_status']['TenderAIAnalyzer'] = f"Error: {str(e)}"
+
+    try:
+        answerer = get_document_question_answerer()
+        if answerer:
+            diagnostics['service_status']['DocumentQuestionAnswerer'] = "Created successfully"
+            if hasattr(answerer, 'claude_service'):
+                if hasattr(answerer.claude_service, 'claude_available'):
+                    diagnostics['service_status']['claude_in_answerer'] = answerer.claude_service.claude_available
+                else:
+                    diagnostics['service_status']['claude_in_answerer'] = "claude_available attribute missing"
+            else:
+                diagnostics['service_status']['claude_in_answerer'] = "No claude_service attribute"
+        else:
+            diagnostics['service_status']['DocumentQuestionAnswerer'] = "Failed to create"
+    except Exception as e:
+        diagnostics['service_status']['DocumentQuestionAnswerer'] = f"Error: {str(e)}"
+
+    # Generate recommendations
+    if not diagnostics['django_settings'].get('CLAUDE_API_KEY'):
+        diagnostics['recommendations'].append("❌ CLAUDE_API_KEY not set in Django settings")
+
+    if diagnostics['import_status'].get('anthropic') == "Not installed":
+        diagnostics['recommendations'].append("❌ anthropic library not installed - run: pip install anthropic")
+
+    if isinstance(diagnostics['import_status'].get('TenderAIAnalyzer'), str):
+        diagnostics['recommendations'].append("❌ TenderAIAnalyzer import failed - check services/ai_analysis.py")
+
+    if isinstance(diagnostics['import_status'].get('DocumentQuestionAnswerer'), str):
+        diagnostics['recommendations'].append("❌ DocumentQuestionAnswerer import failed - check services/ai_analysis.py")
+
+    if not diagnostics['service_status'].get('claude_in_answerer', False):
+        diagnostics['recommendations'].append("⚠️ Claude AI not available in DocumentQuestionAnswerer")
+
+    if not diagnostics['recommendations']:
+        diagnostics['recommendations'].append("✅ All checks passed!")
+
+    # Format for JSON response
+    if request.META.get('HTTP_ACCEPT') == 'application/json':
+        return JsonResponse(diagnostics)
+
+    # Or render as template
+    return render(request, 'tenders/ai_diagnostics.html', {'diagnostics': diagnostics})
+
+@csrf_exempt
+@require_POST
+def update_rfi_item(request, rfi_id):
+    """Update an RFI item status or response"""
+    try:
+        data = json.loads(request.body)
+        rfi_item = get_object_or_404(RFIItem, id=rfi_id)
+
+        # Update fields if provided
+        if 'status' in data:
+            rfi_item.status = data['status']
+        if 'response' in data:
+            rfi_item.response = data['response']
+        if 'contractor_response' in data:
+            rfi_item.contractor_response = data['contractor_response']
+
+        rfi_item.updated_at = timezone.now()
+        rfi_item.save()
+
+        return JsonResponse({
+            'success': True,
+            'message': 'RFI item updated successfully'
+        })
+
+    except Exception as e:
+        logger.exception(f"Error updating RFI item {rfi_id}")
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@login_required
+def rfi_items_json(request, project_id):
+    """Return RFI items as JSON for AJAX requests"""
+    try:
+        project = get_object_or_404(Project, id=project_id)
+        try:
+            rfi_items = RFIItem.objects.filter(project=project).order_by('category', 'priority')
+        except:
+            rfi_items = []
+
+        data = []
+        for item in rfi_items:
+            data.append({
+                'id': item.id,
+                'category': getattr(item, 'category', ''),
+                'priority': getattr(item, 'priority', ''),
+                'question': getattr(item, 'question', ''),
+                'status': getattr(item, 'status', ''),
+                'response': getattr(item, 'response', '') or '',
+                'contractor_response': getattr(item, 'contractor_response', '') or '',
+                'created_at': item.created_at.isoformat(),
+                'updated_at': item.updated_at.isoformat() if hasattr(item, 'updated_at') and item.updated_at else None,
+            })
+
+        return JsonResponse({'rfi_items': data})
+
+    except Exception as e:
+        logger.exception(f"Error getting RFI items for project {project_id}")
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_POST
+def update_invitation_notes(request, invitation_id):
+    """Update notes for a tender invitation"""
+    try:
+        data = json.loads(request.body)
+        notes = data.get('notes', '').strip()
+
+        invitation = get_object_or_404(TenderInvitation, id=invitation_id)
+        invitation.notes = notes
+        invitation.save()
+
+        return JsonResponse({
+            'success': True,
+            'message': 'Notes updated successfully'
+        })
+
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@login_required
+def toggle_tender_returned(request, invitation_id):
+    """Toggle tender returned status"""
+    invitation = get_object_or_404(TenderInvitation, id=invitation_id)
+
+    if request.method == 'POST':
+        status = request.POST.get('status')
+
+        if status == 'returned':
+            # Mark as returned
+            invitation.tender_returned = True
+            invitation.tender_returned_at = timezone.now()
+            invitation.save()
+
+            messages.success(
+                request,
+                f"✓ Marked {invitation.subcontractor.company} tender as returned"
+            )
+        else:
+            # Toggle functionality (for backwards compatibility)
+            invitation.tender_returned = not invitation.tender_returned
+            if invitation.tender_returned:
+                invitation.tender_returned_at = timezone.now()
+            else:
+                invitation.tender_returned_at = None
+            invitation.save()
+
+            status_text = "returned" if invitation.tender_returned else "not returned"
+            messages.success(
+                request,
+                f"Updated {invitation.subcontractor.company} tender status to {status_text}"
+            )
+
+    return redirect('tenders:tracking', project_id=invitation.project.id)
+
+
+# API endpoints
+@csrf_exempt
+@require_POST
+def tender_returned_api(request):
+    """API endpoint for marking tenders as returned via external systems"""
+    try:
+        data = json.loads(request.body)
+        subcontractor_email = data.get('email')
+        project_name = data.get('project')
+
+        if not subcontractor_email or not project_name:
+            return JsonResponse({'error': 'Email and project name required'}, status=400)
+
+        # Find the invitation
+        invitation = TenderInvitation.objects.filter(
+            subcontractor__email=subcontractor_email,
+            project__name__icontains=project_name
+        ).first()
+
+        if invitation:
+            invitation.tender_returned = True
+            invitation.status = 'ACCEPTED'
+            invitation.returned_at = timezone.now()
+            invitation.save()
+
+            return JsonResponse({
+                'success': True,
+                'message': 'Tender marked as returned'
+            })
+        else:
+            return JsonResponse({'error': 'Invitation not found'}, status=404)
+
+    except Exception as e:
+        logger.exception("Error in tender_returned_api")
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@login_required
+def manual_tender_return(request):
+    """Manual interface for marking tenders as returned"""
+    if request.method == 'POST':
+        invitation_id = request.POST.get('invitation_id')
+        try:
+            invitation = get_object_or_404(TenderInvitation, id=invitation_id)
+            invitation.tender_returned = True
+            invitation.status = 'ACCEPTED'
+            invitation.returned_at = timezone.now()
+            invitation.save()
+
+            messages.success(request, f"Tender from {invitation.subcontractor.company_name} marked as returned.")
+            return redirect('tenders:tracking', project_id=invitation.project.id)
+
+        except Exception as e:
+            messages.error(request, f"Error updating tender status: {str(e)}")
+            return redirect('tenders:list')
+
+    # GET request - show form
+    invitations = TenderInvitation.objects.filter(
+        tender_returned=False,
+        status='PENDING'
+    ).select_related('project', 'subcontractor')
+
+    return render(request, 'tenders/manual_return.html', {
+        'invitations': invitations
+    })
+
+
+# Additional view classes for better organization
+class SendReminderView(LoginRequiredMixin, View):
+    """Send reminder for individual invitation"""
+
+    def post(self, request, invitation_id):
+        invitation = get_object_or_404(TenderInvitation, id=invitation_id)
+
+        try:
+            if OutlookEmailService:
+                email_service = OutlookEmailService()
+                success = email_service.send_tender_reminder(invitation)
+
+                if success:
+                    invitation.reminder_sent_at = timezone.now()
+                    invitation.save()
+                    messages.success(request, f"Reminder sent to {invitation.subcontractor.company_name}")
+                else:
+                    messages.error(request, "Failed to send reminder email")
+            else:
+                messages.error(request, "Email service not available")
+
+        except Exception as e:
+            logger.exception(f"Error sending reminder for invitation {invitation_id}")
+            messages.error(request, f"Error sending reminder: {str(e)}")
+
+        return redirect('tenders:tracking', project_id=invitation.project.id)
+
+
+class SendAllRemindersView(LoginRequiredMixin, View):
+    """Enhanced reminder system with daily limits and different message types"""
+
+    def get(self, request, project_id):
+        """Show confirmation page with daily limit checks"""
+        project = get_object_or_404(Project, id=project_id)
+        reminder_type = request.GET.get('type', 'pending')
+
+        # Get today's date for daily limit checking
+        today = timezone.now().date()
+
+        if reminder_type == 'pending':
+            # Get pending invitations that haven't had a reminder today
+            invitations = TenderInvitation.objects.filter(
+                project=project,
+                status='PENDING',
+                tender_returned=False
+            ).exclude(
+                last_pending_reminder__date=today  # Exclude if already sent today
+            )
+
+            reminder_title = "Remind Non-Responders"
+            reminder_description = "Send daily reminder to subcontractors who haven't responded (max once per day)"
+
+        elif reminder_type == 'will_tender':
+            # Get accepted invitations that haven't had a tender reminder today
+            invitations = TenderInvitation.objects.filter(
+                project=project,
+                status='ACCEPTED',
+                tender_returned=False
+            ).exclude(
+                last_will_tender_reminder__date=today  # Exclude if already sent today
+            )
+
+            reminder_title = "Remind Will Tender"
+            reminder_description = "Send tender deadline reminder to subcontractors who confirmed they will tender"
+
+        else:
+            messages.error(request, "Invalid reminder type")
+            return redirect('tenders:tracking', project_id=project_id)
+
+        # Count how many already received reminders today
+        if reminder_type == 'pending':
+            already_sent_today = TenderInvitation.objects.filter(
+                project=project,
+                status='PENDING',
+                last_pending_reminder__date=today
+            ).count()
+        else:
+            already_sent_today = TenderInvitation.objects.filter(
+                project=project,
+                status='ACCEPTED',
+                last_will_tender_reminder__date=today
+            ).count()
+
+        context = {
+            'project': project,
+            'invitations': invitations,
+            'reminder_type': reminder_type,
+            'reminder_title': reminder_title,
+            'reminder_description': reminder_description,
+            'already_sent_today': already_sent_today,
+            'can_send_today': invitations.exists(),
+        }
+
+        return render(request, 'tenders/send_reminders_confirm.html', context)
+
+    def post(self, request, project_id):
+        """Send reminders with daily limits and enhanced tracking"""
+        project = get_object_or_404(Project, id=project_id)
+        reminder_type = request.POST.get('type', 'pending')
+
+        try:
+            today = timezone.now().date()
+
+            # Get appropriate invitations based on type and daily limits
+            if reminder_type == 'pending':
+                invitations = TenderInvitation.objects.filter(
+                    project=project,
+                    status='PENDING',
+                    tender_returned=False
+                ).exclude(
+                    last_pending_reminder__date=today
+                )
+                message_suffix = "to non-responding subcontractors"
+
+            elif reminder_type == 'will_tender':
+                invitations = TenderInvitation.objects.filter(
+                    project=project,
+                    status='ACCEPTED',
+                    tender_returned=False
+                ).exclude(
+                    last_will_tender_reminder__date=today
+                )
+                message_suffix = "to subcontractors who will tender"
+
+            else:
+                messages.error(request, "Invalid reminder type")
+                return redirect('tenders:tracking', project_id=project_id)
+
+            if not invitations.exists():
+                messages.info(request, f"No {reminder_type} reminders to send today (daily limit applied)")
+                return redirect('tenders:tracking', project_id=project_id)
+
+            if OutlookEmailService:
+                email_service = OutlookEmailService()
+                reminders_sent = 0
+                errors = 0
+
+                for invitation in invitations:
+                    try:
+                        # Send reminder using appropriate method based on type
+                        if reminder_type == 'pending':
+                            success = email_service.send_pending_response_reminder(invitation)
+                        elif reminder_type == 'will_tender':
+                            success = email_service.send_will_tender_deadline_reminder(invitation)
+                        else:
+                            success = False
+                            logger.error(f"Unknown reminder type: {reminder_type}")
+
+                        if success:
+                            now = timezone.now()
+
+                            # Update tracking fields based on reminder type
+                            if reminder_type == 'pending':
+                                invitation.last_pending_reminder = now
+                                invitation.pending_reminder_count += 1
+                            else:  # will_tender
+                                invitation.last_will_tender_reminder = now
+                                invitation.will_tender_reminder_count += 1
+
+                            invitation.reminder_sent_at = now  # Generic reminder timestamp
+                            invitation.save()
+
+                            reminders_sent += 1
+                            logger.info(f"✅ {reminder_type} reminder sent to {invitation.subcontractor.company}")
+                        else:
+                            errors += 1
+                            logger.error(f"❌ Failed to send {reminder_type} reminder to {invitation.subcontractor.company}")
+
+                    except Exception as e:
+                        errors += 1
+                        logger.exception(f"Error sending {reminder_type} reminder to {invitation.subcontractor.company}: {str(e)}")
+
+                # Success message
+                if reminders_sent > 0:
+                    messages.success(request, f"Sent {reminders_sent} {reminder_type} reminder emails {message_suffix}")
+
+                if errors > 0:
+                    messages.warning(request, f"Failed to send {errors} reminders. Check logs for details.")
+
+            else:
+                messages.error(request, "Email service not available")
+
+        except Exception as e:
+            logger.exception(f"Error sending {reminder_type} reminders for project {project_id}")
+            messages.error(request, f"Error sending reminders: {str(e)}")
+
+        return redirect('tenders:tracking', project_id=project_id)
+
+
+class ResendInvitationView(LoginRequiredMixin, View):
+    """Resend invitation to a subcontractor"""
+
+    def post(self, request, invitation_id):
+        invitation = get_object_or_404(TenderInvitation, id=invitation_id)
+
+        try:
+            if OutlookEmailService:
+                email_service = OutlookEmailService()
+                tracking_token = self._generate_tracking_token(invitation.id)
+                tracking_url = request.build_absolute_uri(
+                    reverse('tenders:track_email', kwargs={'token': tracking_token})
+                )
+
+                success = email_service.send_tender_invitation(invitation, tracking_url)
+
+                if success:
+                    invitation.sent_at = timezone.now()
+                    invitation.save()
+                    messages.success(request, f"Invitation resent to {invitation.subcontractor.company_name}")
+                else:
+                    messages.error(request, "Failed to resend invitation")
+            else:
+                messages.error(request, "Email service not available")
+
+        except Exception as e:
+            logger.exception(f"Error resending invitation {invitation_id}")
+            messages.error(request, f"Error resending invitation: {str(e)}")
+
+        return redirect('tenders:tracking', project_id=invitation.project.id)
+
+    def _generate_tracking_token(self, invitation_id):
+        signer = Signer()
+        return signer.sign(str(invitation_id))
+
+
+class UpdateInvitationStatusView(LoginRequiredMixin, View):
+    """Update the status of a tender invitation"""
+
+    def post(self, request, invitation_id):
+        invitation = get_object_or_404(TenderInvitation, id=invitation_id)
+
+        try:
+            new_status = request.POST.get('status')
+            if new_status in ['PENDING', 'ACCEPTED', 'DECLINED']:
+                invitation.status = new_status
+                invitation.save()
+                messages.success(request, f"Status updated to {new_status}")
+            else:
+                messages.error(request, "Invalid status")
+
+        except Exception as e:
+            logger.exception(f"Error updating invitation status {invitation_id}")
+            messages.error(request, f"Error updating status: {str(e)}")
+
+        return redirect('tenders:tracking', project_id=invitation.project.id)
+
+
+class TrackEmailView(View):
+    """Track email opens via pixel tracking"""
+
+    def get(self, request, token):
+        try:
+            signer = Signer()
+            invitation_id = signer.unsign(token)
+
+            invitation = get_object_or_404(TenderInvitation, id=invitation_id)
+            invitation.email_opened = True
+            invitation.email_opened_at = timezone.now()
+            invitation.save()
+
+            # Return a 1x1 transparent pixel
+            pixel_data = base64.b64decode(
+                'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+            )
+            return HttpResponse(pixel_data, content_type='image/gif')
+
+        except (BadSignature, SignatureExpired):
+            return HttpResponseNotFound()
+
+
+class EmailLinkView(LoginRequiredMixin, View):
+    """Generate email with project link for sharing"""
+
+    def get(self, request, project_id):
+        project = get_object_or_404(Project, id=project_id)
+
+        # Generate secure link
+        project_url = request.build_absolute_uri(
+            reverse('projects:detail', kwargs={'pk': project.id})
+        )
+
+        email_data = {
+            'project_name': project.name,
+            'project_url': project_url,
+            'sender_name': request.user.get_full_name() or request.user.username,
+        }
+
+        return JsonResponse(email_data)
+
+
+class EmailScreenshotView(LoginRequiredMixin, View):
+    """Generate screenshot for email attachments"""
+
+    def post(self, request, project_id):
+        project = get_object_or_404(Project, id=project_id)
+
+        try:
+            # This would integrate with a screenshot service
+            # For now, return success response
+            return JsonResponse({
+                'success': True,
+                'message': 'Screenshot feature not yet implemented'
+            })
+
+        except Exception as e:
+            logger.exception(f"Error generating screenshot for project {project_id}")
+            return JsonResponse({'error': str(e)}, status=500)
+
+
+class RecommendationDetailView(LoginRequiredMixin, DetailView):
+    """Detailed view of a subcontractor recommendation - DISABLED"""
+    model = Project  # Changed from SubcontractorRecommendation
+    template_name = 'tenders/recommendation_detail.html'
+    context_object_name = 'project'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # Remove all recommendation-related logic
+        context['historical_stats'] = {
+            'total_invitations': 0,
+            'accepted_rate': 0,
+            'response_rate': 0,
+            'recent_projects': []
+        }
+        return context
+
+
+class InviteRecommendedView(LoginRequiredMixin, View):
+    """Automatically invite all recommended subcontractors - DISABLED"""
+
+    def post(self, request, project_id):
+        project = get_object_or_404(Project, id=project_id)
+
+        messages.info(request, "Subcontractor recommendation feature is currently disabled.")
+        return redirect('tenders:tracking', project_id=project.id)
+
+
+class TenderResponseView(View):
+    """Handle tender responses from subcontractors"""
+
+    def get(self, request, token):
+        try:
+            signer = Signer()
+            invitation_id = signer.unsign(token)
+
+            invitation = get_object_or_404(TenderInvitation, id=invitation_id)
+
+            # Track that the response page was accessed
+            invitation.email_opened = True
+            if not invitation.email_opened_at:
+                invitation.email_opened_at = timezone.now()
+            invitation.save()
+
+            context = {
+                'invitation': invitation,
+                'project': invitation.project,
+                'subcontractor': invitation.subcontractor,
+                'token': token
+            }
+
+            return render(request, 'tenders/tender_response.html', context)
+
+        except (BadSignature, SignatureExpired):
+            return render(request, 'tenders/invalid_token.html', status=404)
+
+    def post(self, request, token):
+        try:
+            signer = Signer()
+            invitation_id = signer.unsign(token)
+
+            invitation = get_object_or_404(TenderInvitation, id=invitation_id)
+
+            # Update invitation status based on response
+            response = request.POST.get('response')
+            notes = request.POST.get('notes', '')
+
+            if response == 'accept':
+                invitation.status = 'ACCEPTED'
+                message = f"Thank you! We have recorded that {invitation.subcontractor.company} will tender for {invitation.project.name}."
+            elif response == 'decline':
+                invitation.status = 'DECLINED'
+                message = f"Thank you for letting us know that {invitation.subcontractor.company} will not tender for {invitation.project.name}."
+            else:
+                message = "Invalid response received."
+
+            if notes:
+                invitation.notes = notes
+
+            invitation.response_date = timezone.now()
+            invitation.save()
+
+            context = {
+                'invitation': invitation,
+                'message': message,
+                'success': True
+            }
+
+            return render(request, 'tenders/response_confirmation.html', context)
+
+        except (BadSignature, SignatureExpired):
+            return render(request, 'tenders/invalid_token.html', status=404)
+
+
+@login_required
+@require_POST
+def upload_document(request):
+    """Upload a document to a project"""
+    try:
+        document_type = request.POST.get('document_type')
+        title = request.POST.get('title')
+        project_id = request.POST.get('project_id')
+        description = request.POST.get('description', '')
+        sharepoint_link = request.POST.get('sharepoint_link', '')
+
+        if not title:
+            return JsonResponse({
+                'success': False,
+                'error': 'Document title is required'
+            }, status=400)
+
+        if not document_type:
+            return JsonResponse({
+                'success': False,
+                'error': 'Document type is required'
+            }, status=400)
+
+        if not project_id:
+            return JsonResponse({
+                'success': False,
+                'error': 'Project ID is required'
+            }, status=400)
+
+        try:
+            project = get_object_or_404(Project, id=project_id)
+        except:
+            return JsonResponse({
+                'success': False,
+                'error': f'Project with ID {project_id} not found'
+            }, status=404)
+
+        document_file = request.FILES.get('file')
+
+        if not document_file and not sharepoint_link:
+            return JsonResponse({
+                'success': False,
+                'error': 'Either a file or a SharePoint link is required'
+            }, status=400)
+
+        if document_file and document_file.size > 20 * 1024 * 1024:  # 20MB limit
+            return JsonResponse({
+                'success': False,
+                'error': 'File size exceeds the maximum allowed (20MB)'
+            }, status=400)
+
+        try:
+            document = TenderDocument.objects.create(
+                project=project,
+                document_type=document_type,
+                title=title,
+                description=description,
+                file=document_file,
+                sharepoint_link=sharepoint_link
+            )
+
+            return JsonResponse({
+                'success': True,
+                'document_id': document.id,
+                'document_type': document.get_document_type_display()
+            })
+
+        except Exception as create_error:
+            logger.exception(f"Error creating document: {str(create_error)}")
+            return JsonResponse({
+                'success': False,
+                'error': f'Error creating document: {str(create_error)}'
+            }, status=500)
+
+    except Exception as e:
+        logger.exception(f"Unexpected error in upload_document: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
+@login_required
+@require_POST
+def remove_document(request, document_id):
+    """Remove a document"""
+    try:
+        document = get_object_or_404(TenderDocument, id=document_id)
+        document_title = document.title
+
+        document.delete()
+
+        return JsonResponse({
+            'success': True,
+            'id': document_id,
+            'title': document_title
+        })
+
+    except Exception as e:
+        logger.exception(f"Error removing document {document_id}: {str(e)}")
+@method_decorator(csrf_exempt, name='dispatch')
+class AnswerQuestionView(LoginRequiredMixin, View):
+    """Answer a clarification question"""
+
+    def post(self, request, question_id):
+        try:
+            data = json.loads(request.body)
+            answer_text = data.get('answer', '').strip()
+
+            if not answer_text:
+                return JsonResponse({'error': 'Answer text is required'}, status=400)
+
+            question = get_object_or_404(TenderQuestion, id=question_id)
+
+            question.answer_text = answer_text
+            question.answered_by = request.user.username
+            question.answered_at = timezone.now()
+            question.is_answered = True
+            question.save()
+
+            return JsonResponse({
+                'success': True,
+                'message': 'Question answered successfully'
+            })
+
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+
+
+try:
+    from .services.enhanced_ask_ai_system import ask_comprehensive_question, get_enhanced_question_answerer
+    ENHANCED_AI_AVAILABLE = True
+except ImportError:
+    ENHANCED_AI_AVAILABLE = False
+
+
+class EnhancedAskAIView(LoginRequiredMixin, TemplateView):
+    """
+    Enhanced Ask AI interface with comprehensive document analysis
+    """
+    template_name = 'tenders/enhanced_ask_ai.html'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        project_id = self.kwargs.get('project_id')
+        project = get_object_or_404(Project, id=project_id)
+
+        # Get document analysis summary
+        if ENHANCED_AI_AVAILABLE:
+            answerer = get_enhanced_question_answerer()
+            if answerer:
+                try:
+                    # Get document suite information
+                    documents_data = answerer._get_comprehensive_documents(project, use_cache=True)
+                    context['document_analysis'] = {
+                        'total_documents': documents_data['total_documents'],
+                        'document_categories': documents_data['documents_by_category'],
+                        'folder_structure': documents_data['folder_structure'],
+                        'processing_summary': documents_data['processing_summary']
+                    }
+                except Exception as e:
+                    logger.warning(f"Could not get document analysis: {str(e)}")
+                    context['document_analysis'] = None
+            else:
+                context['document_analysis'] = None
+        else:
+            context['document_analysis'] = None
+
+        # Get conversation history
+        try:
+            conversation = AIConversation.objects.get(project=project)
+            context['conversation_history'] = AIQuestion.objects.filter(
+                conversation=conversation
+            ).order_by('-created_date')[:20]
+        except AIConversation.DoesNotExist:
+            context['conversation_history'] = []
+
+        context['project'] = project
+        context['enhanced_ai_available'] = ENHANCED_AI_AVAILABLE
+        return context
+
+
+@csrf_exempt
+@require_POST
+def enhanced_ask_ai_question(request, project_id):
+    """
+    Enhanced AI question endpoint with comprehensive document analysis
+    """
+    if not ENHANCED_AI_AVAILABLE:
+        return JsonResponse({
+            'success': False,
+            'error': 'Enhanced AI service is not available'
+        }, status=503)
+
+    try:
+        data = json.loads(request.body)
+        question = data.get('question', '').strip()
+        force_refresh = data.get('force_refresh', False)
+
+        if not question:
+            return JsonResponse({'error': 'Question is required'}, status=400)
+
+        project = get_object_or_404(Project, id=project_id)
+
+        # Check if project has SharePoint configuration
+        if not project.sharepoint_folder_url:
+            return JsonResponse({
+                'success': False,
+                'error': 'No SharePoint folder configured for this project. Please configure SharePoint integration first.'
+            }, status=400)
+
+        # Clear cache if force refresh requested
+        if force_refresh:
+            answerer = get_enhanced_question_answerer()
+            if answerer:
+                answerer.clear_document_cache(project)
+
+        # Get comprehensive answer
+        answer_data = ask_comprehensive_question(project, question)
+
+        # Format response
+        response_data = {
+            'success': True,
+            'answer': answer_data.get('answer', 'No answer available'),
+            'confidence': answer_data.get('confidence', 0),
+            'key_findings': answer_data.get('key_findings', []),
+            'source_documents': answer_data.get('source_documents', []),
+            'document_references': answer_data.get('document_references', []),
+            'cross_references': answer_data.get('cross_references', []),
+            'recommendations': answer_data.get('recommendations', []),
+            'follow_up_questions': answer_data.get('follow_up_questions', []),
+            'document_analysis': answer_data.get('document_analysis', {}),
+            'analysis_type': answer_data.get('analysis_type', 'BASIC')
+        }
+
+        return JsonResponse(response_data)
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON data'}, status=400)
+    except Exception as e:
+        logger.error(f"Error in enhanced Ask AI: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': f'Analysis failed: {str(e)}'
+        }, status=500)
+
+
+@login_required
+def get_conversation_history(request, project_id):
+    """
+    Get conversation history for a project
+    """
+    try:
+        project = get_object_or_404(Project, id=project_id)
+
+        try:
+            conversation = AIConversation.objects.get(project=project)
+            questions = AIQuestion.objects.filter(conversation=conversation).order_by('-created_date')
+
+            history = []
+            for question in questions:
+                history.append({
+                    'id': question.id,
+                    'question': question.question_text,
+                    'answer': question.answer_text,
+                    'confidence': question.confidence_score,
+                    'timestamp': question.created_date.isoformat(),
+                    'source_documents': question.source_documents,
+                    'document_references': question.document_references,
+                    'analysis_metadata': question.analysis_metadata
+                })
+
+            return JsonResponse({
+                'success': True,
+                'conversation_id': conversation.id,
+                'history': history
+            })
+
+        except AIConversation.DoesNotExist:
+            return JsonResponse({
+                'success': True,
+                'conversation_id': None,
+                'history': []
+            })
+
+    except Exception as e:
+        logger.error(f"Error getting conversation history: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
+@login_required
+def clear_document_cache(request, project_id):
+    """
+    Clear document cache for a project
+    """
+    if not ENHANCED_AI_AVAILABLE:
+        return JsonResponse({
+            'success': False,
+            'error': 'Enhanced AI service not available'
+        }, status=503)
+
+    try:
+        project = get_object_or_404(Project, id=project_id)
+
+        answerer = get_enhanced_question_answerer()
+        if answerer:
+            answerer.clear_document_cache(project)
+            return JsonResponse({
+                'success': True,
+                'message': 'Document cache cleared successfully'
+            })
+        else:
+            return JsonResponse({
+                'success': False,
+                'error': 'AI service not available'
+            }, status=500)
+
+    except Exception as e:
+        logger.error(f"Error clearing document cache: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
+
+@login_required
+def get_document_analysis_summary(request, project_id):
+    """
+    Get document analysis summary for a project
+    """
+    if not ENHANCED_AI_AVAILABLE:
+        return JsonResponse({
+            'success': False,
+            'error': 'Enhanced AI service not available'
+        }, status=503)
+
+    try:
+        project = get_object_or_404(Project, id=project_id)
+
+        answerer = get_enhanced_question_answerer()
+        if not answerer:
+            return JsonResponse({
+                'success': False,
+                'error': 'AI service not available'
+            }, status=500)
+
+        # Get document suite information
+        documents_data = answerer._get_comprehensive_documents(project, use_cache=True)
+
+        summary = {
+            'total_documents': documents_data['total_documents'],
+            'document_categories': {},
+            'folder_structure': documents_data['folder_structure'],
+            'processing_summary': documents_data['processing_summary'],
+            'document_metadata': {}
+        }
+
+        # Add category counts
+        for category, docs in documents_data['documents_by_category'].items():
+            summary['document_categories'][category] = {
+                'count': len(docs),
+                'documents': docs
+            }
+
+        # Add sample metadata
+        for doc_name, metadata in list(documents_data['document_metadata'].items())[:10]:
+            summary['document_metadata'][doc_name] = metadata
+
+        return JsonResponse({
+            'success': True,
+            'summary': summary
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting document analysis summary: {str(e)}")
+        return JsonResponse({
+            'success': False,
+            'error': str(e)
+        }, status=500)

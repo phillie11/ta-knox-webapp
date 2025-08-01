@@ -1,0 +1,29 @@
+<!-- sidebar.html update - remove Tenders link -->
+<nav id="sidebarMenu" class="col-md-3 col-lg-2 d-md-block sidebar collapse">
+    <div class="position-sticky pt-3">
+        <ul class="nav flex-column">
+            <li class="nav-item">
+                <a class="nav-link" href="{% url 'home' %}">
+                    <i class="bi bi-house"></i> Dashboard
+                </a>
+            </li>
+            {% if user.is_authenticated %}
+                <li class="nav-item">
+                    <a class="nav-link" href="{% url 'projects:list' %}">
+                        <i class="bi bi-folder"></i> Projects
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{% url 'subcontractors:list' %}">
+                        <i class="bi bi-people"></i> Subcontractors
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{% url 'project_tracker:list' %}">
+                        <i class="bi bi-kanban"></i> Tender Tracker
+                    </a>
+                </li>
+            {% endif %}
+        </ul>
+    </div>
+</nav>

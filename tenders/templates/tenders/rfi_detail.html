@@ -1,0 +1,169 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}{{ rfi.rfi_number }} - {{ project.name }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>{{ rfi.rfi_number }} - {{ rfi.get_category_display }}</h1>
+        <a href="{% url 'tenders:rfi_list' project.id %}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left"></i> Back to RFI List
+        </a>
+    </div>
+
+    <div class="row">
+        <div class="col-md-8">
+            <!-- RFI Details -->
+            <div class="card mb-4">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">RFI Details</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <strong>Category:</strong> {{ rfi.get_category_display }}
+                        </div>
+                        <div class="col-md-6">
+                            <strong>Priority:</strong> 
+                            <span class="badge bg-{{ rfi.priority_color }}">{{ rfi.get_priority_display }}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <strong>Question:</strong>
+                        <div class="border rounded p-3 bg-light">{{ rfi.question }}</div>
+                    </div>
+                    
+                    {% if rfi.context %}
+                    <div class="mb-3">
+                        <strong>Context:</strong>
+                        <div class="border rounded p-3 bg-light">{{ rfi.context }}</div>
+                    </div>
+                    {% endif %}
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <strong>Pricing Impact:</strong> 
+                            <span class="badge bg-{% if rfi.pricing_impact == 'HIGH' %}danger{% elif rfi.pricing_impact == 'MEDIUM' %}warning{% else %}info{% endif %}">
+                                {{ rfi.pricing_impact }}
+                            </span>
+                        </div>
+                        <div class="col-md-6">
+                            <strong>Document Reference:</strong> {{ rfi.document_reference|default:"N/A" }}
+                        </div>
+                    </div>
+                    
+                    {% if rfi.risk_if_unresolved %}
+                    <div class="mb-3">
+                        <strong>Risk if Unresolved:</strong>
+                        <div class="alert alert-warning">{{ rfi.risk_if_unresolved }}</div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Response Form -->
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Response & Status Update</h5>
+                </div>
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %}
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Status</label>
+                            <select name="status" class="form-select">
+                                <option value="PENDING" {% if rfi.status == 'PENDING' %}selected{% endif %}>Pending Response</option>
+                                <option value="SUBMITTED" {% if rfi.status == 'SUBMITTED' %}selected{% endif %}>Submitted to Client</option>
+                                <option value="RESPONDED" {% if rfi.status == 'RESPONDED' %}selected{% endif %}>Client Responded</option>
+                                <option value="CLARIFIED" {% if rfi.status == 'CLARIFIED' %}selected{% endif %}>Clarified & Resolved</option>
+                                <option value="WITHDRAWN" {% if rfi.status == 'WITHDRAWN' %}selected{% endif %}>Question Withdrawn</option>
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Client Response</label>
+                            <textarea name="client_response" class="form-control" rows="4" placeholder="Enter client's response to this RFI...">{{ rfi.client_response }}</textarea>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Internal Notes</label>
+                            <textarea name="internal_notes" class="form-control" rows="3" placeholder="Internal notes about this RFI...">{{ rfi.internal_notes }}</textarea>
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-save"></i> Update RFI
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <!-- Status Timeline -->
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="mb-0">Status Timeline</h6>
+                </div>
+                <div class="card-body">
+                    <div class="timeline">
+                        <div class="timeline-item">
+                            <div class="timeline-marker bg-success"></div>
+                            <div class="timeline-content">
+                                <h6>Created</h6>
+                                <small>{{ rfi.created_at|date:"d/m/Y H:i" }}</small>
+                                <br><small class="text-muted">By: {{ rfi.created_by }}</small>
+                            </div>
+                        </div>
+                        
+                        {% if rfi.submitted_at %}
+                        <div class="timeline-item">
+                            <div class="timeline-marker bg-primary"></div>
+                            <div class="timeline-content">
+                                <h6>Submitted</h6>
+                                <small>{{ rfi.submitted_at|date:"d/m/Y H:i" }}</small>
+                            </div>
+                        </div>
+                        {% endif %}
+                        
+                        {% if rfi.responded_at %}
+                        <div class="timeline-item">
+                            <div class="timeline-marker bg-info"></div>
+                            <div class="timeline-content">
+                                <h6>Client Responded</h6>
+                                <small>{{ rfi.responded_at|date:"d/m/Y H:i" }}</small>
+                            </div>
+                        </div>
+                        {% endif %}
+                        
+                        {% if rfi.resolved_at %}
+                        <div class="timeline-item">
+                            <div class="timeline-marker bg-success"></div>
+                            <div class="timeline-content">
+                                <h6>Resolved</h6>
+                                <small>{{ rfi.resolved_at|date:"d/m/Y H:i" }}</small>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+
+
+
+
+
+
+
+
+
+
+
+

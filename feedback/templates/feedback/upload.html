@@ -1,0 +1,49 @@
+<!-- feedback/templates/feedback/upload.html -->
+{% extends 'base.html' %}
+
+{% block title %}Upload Feedback File{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>Upload Feedback File</h1>
+    
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-body">
+                    <form method="post" enctype="multipart/form-data">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label for="feedback_file" class="form-label">Select File</label>
+                            <input type="file" class="form-control" id="feedback_file" name="feedback_file" 
+                                   accept=".xlsx,.xls,.csv" required>
+                            <div class="form-text">Supported formats: Excel (.xlsx, .xls) and CSV files</div>
+                        </div>
+                        
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-upload"></i> Upload and Analyze
+                        </button>
+                        <a href="{% url 'feedback:dashboard' %}" class="btn btn-secondary ms-2">Cancel</a>
+                    </form>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h6>File Requirements</h6>
+                </div>
+                <div class="card-body">
+                    <ul class="small">
+                        <li>Excel (.xlsx, .xls) or CSV format</li>
+                        <li>First row should contain column headers</li>
+                        <li>Common columns: rating, category, comment, date</li>
+                        <li>Max file size: 10MB</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

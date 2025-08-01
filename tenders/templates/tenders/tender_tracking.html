@@ -1,0 +1,768 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}{{ project.name }} - Tender Tracking{% endblock %}
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>{{ project.name }} - Tender Tracking</h1>
+    <div>
+      <button onclick="openEmailWithLink()" class="btn btn-primary">
+        <i class="bi bi-envelope"></i> Email Report
+      </button>
+      {% if project.email_config and project.email_config.is_active %}
+      <a href="{% url 'communications:check_now' project.id %}?source=tracking" class="btn btn-success ms-2">
+        <i class="bi bi-arrow-repeat"></i> Check Email Folder
+      </a>
+      {% endif %}
+      <a href="{% url 'tenders:send_reminders' project.id %}" class="btn btn-warning ms-2">
+        <i class="bi bi-bell"></i> Send Reminders
+      <a href="{% url 'tenders:send_reminders' project_id=project.id %}?will_tender=true" class="btn btn-outline-info btn-sm">
+        <i class="bi bi-bell"></i> Remind Will Tender
+      </a>
+      </a>
+      <a href="{% url 'tenders:send_addendum' project.id %}" class="btn btn-info ms-2">
+        <i class="bi bi-file-earmark-plus"></i> Send Addendum
+      </a>
+    </div>
+  </div>
+  <!-- Statistics Cards -->
+  <div class="row mb-4">
+    <div class="col-md-2">
+      <div class="card">
+        <div class="card-body">
+          <h5 class="card-title">Total Invitations</h5>
+          <p class="card-text display-4">{{ stats.total }}</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-2">
+      <div class="card bg-success text-white">
+        <div class="card-body">
+          <h5 class="card-title">Will Tender</h5>
+          <p class="card-text display-4">{{ stats.accepted }}</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-2">
+      <div class="card bg-danger text-white">
+        <div class="card-body">
+          <h5 class="card-title">Won't Tender</h5>
+          <p class="card-text display-4">{{ stats.declined }}</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-2">
+      <div class="card bg-warning">
+        <div class="card-body">
+          <h5 class="card-title">Pending</h5>
+          <p class="card-text display-4">{{ stats.pending }}</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card mb-4">
+  <div class="card-header bg-primary d-flex justify-content-between align-items-center">
+    <h5 class="mb-0">🔧 Manual Actions</h5>
+  </div>
+  <div class="row">
+      <div class="col-md-6">
+          <h6>Email Monitoring</h6>
+          <a href="{% url 'communications:check_now' project.id %}?source=tracking" class="btn btn-outline-primary btn-sm me-2">
+              <i class="bi bi-arrow-clockwise"></i> Check Emails Now
+          </a>
+      </div>
+      <div class="col-md-6">
+        <h6>Reminder Actions</h6>
+        <div class="btn-group" role="group">
+            <a href="{% url 'tenders:send_reminders' project.id %}?type=pending" class="btn btn-outline-warning btn-sm">
+                <i class="bi bi-bell"></i> Remind Non-Responders
+                <small class="d-block">Max once per day</small>
+            </a>
+            <a href="{% url 'tenders:send_reminders' project.id %}?type=will_tender" class="btn btn-outline-info btn-sm">
+                <i class="bi bi-bell"></i> Remind Will Tender
+                <small class="d-block">Deadline reminder</small>
+            </a>
+        </div>
+      </div>
+  </div>
+</div>
+<div class="modal fade" id="manualMatchModal" tabindex="-1" aria-labelledby="manualMatchModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="manualMatchModalLabel">Manually Record Tender Return</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form id="manualMatchForm">
+        <div class="modal-body">
+          {% csrf_token %}
+          <div class="alert alert-info">
+            <small>Use this when you receive a tender return via email that wasn't automatically detected.</small>
+          </div>
+
+          <div class="mb-3">
+            <label for="subcontractor_select" class="form-label">Subcontractor</label>
+            <select class="form-select" id="subcontractor_select" required>
+              <option value="">Select a subcontractor</option>
+              {% for invitation in invitations %}
+                <option value="{{ invitation.subcontractor.id }}"
+                        data-company="{{ invitation.subcontractor.company }}"
+                        data-email="{{ invitation.subcontractor.email }}">
+                  {{ invitation.subcontractor.company }} ({{ invitation.subcontractor.email }})
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label for="sender_email" class="form-label">Actual Sender Email</label>
+            <input type="email" class="form-control" id="sender_email" required
+                   placeholder="The email address that sent the tender">
+            <div class="form-text">The actual email address that sent the tender return</div>
+          </div>
+
+          <div class="mb-3">
+            <label for="match_notes" class="form-label">Notes</label>
+            <textarea class="form-control" id="match_notes" rows="3"
+                      placeholder="Optional notes about this tender return"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-check-circle"></i> Record Tender Return
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+  <!-- Email Monitoring Status (new section) -->
+{% if project.email_config %}
+  <div class="card mb-4">
+    <div class="card-header bg-primary d-flex justify-content-between align-items-center">
+      <h5 class="mb-0">Email Monitoring</h5>
+      <a href="{% url 'communications:check_now' project.id %}?source=tracking" class="btn btn-sm btn-success">
+        <i class="bi bi-arrow-repeat"></i> Check Now
+      </a>
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <div class="col-md-6">
+          <p><strong>Status:</strong>
+            {% if project.email_config.is_active %}
+            <span class="badge bg-success">Active</span>
+            {% else %}
+            <span class="badge bg-secondary">Inactive</span>
+            {% endif %}
+          </p>
+          <p><strong>Folder:</strong> {{ project.email_config.folder_name }}</p>
+        </div>
+        <div class="col-md-6">
+          <p><strong>Last Check:</strong>
+            {% if project.email_config.last_check_time %}
+            {{ project.email_config.last_check_time|date:"d/m/Y H:i" }}
+            {% else %}
+            Never
+            {% endif %}
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% endif %}
+
+  <!-- Trade Return Statistics -->
+<div class="card mb-4">
+  <div class="card-header bg-primary">
+    <h5 class="mb-0">Tender Returns by Trade</h5>
+  </div>
+  <div class="card-body">
+    {% if trades_stats %}
+      <div class="table-responsive">
+        <table class="table table-striped">
+          <thead>
+            <tr>
+              <th>Trade</th>
+              <th>Total Invitations</th>
+              <th>Returned</th>
+              <th>Return Rate</th>
+              <th>Progress</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for trade in trades_stats %}
+              <tr>
+                <td><strong>{{ trade.name }}</strong></td>
+                <td>{{ trade.total }}</td>
+                <td>{{ trade.returned }}</td>
+                <td>{{ trade.return_rate }}%</td>
+                <td>
+                  <div class="progress" style="height: 10px;">
+                    <div class="progress-bar bg-info" role="progressbar" style="width: {{ trade.return_rate }}%"
+                        aria-valuenow="{{ trade.return_rate }}" aria-valuemin="0" aria-valuemax="100"></div>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="alert alert-info">
+        <i class="bi bi-info-circle me-2"></i> No tender invitations sent yet.
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+  <!-- Main table with subcontractor responses -->
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center bg-primary">
+      <h3 class="mb-0">Subcontractor Responses</h3>
+      <div>
+        <a href="{% url 'tenders:send_reminders' project.id %}" class="btn btn-sm btn-warning">Send All Reminders</a>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-striped mb-0">
+          <thead>
+            <tr>
+              <th>Subcontractor</th>
+              <th>Trade</th>
+              <th>Contact</th>
+              <th>Invitation Sent</th>
+              <th>Status</th>
+              <th>Email Opened</th>
+              <th>Documents Downloaded</th>
+              <th>Tender Returned</th>
+              <th>Notes</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for invitation in invitations %}
+            <tr>
+              <td>
+                <strong>{{ invitation.subcontractor.company }}</strong><br>
+                <small class="text-muted">{{ invitation.subcontractor.head_office }}</small>
+              </td>
+              <td>{{ invitation.subcontractor.trade }}</td>
+              <td>
+                <div>{{ invitation.subcontractor.full_name }}</div>
+                <div class="small text-primary">{{ invitation.subcontractor.email }}</div>
+                {% if invitation.subcontractor.mobile %}
+                  <div class="small text-muted">{{ invitation.subcontractor.mobile }}</div>
+                {% endif %}
+              </td>
+              <td>
+                {% if invitation.email_sent %}
+                  {{ invitation.email_sent|date:"d/m/Y H:i" }}
+                {% else %}
+                  <span class="text-muted">Not sent</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if invitation.status == 'ACCEPTED' %}
+                <span class="badge bg-success">Will Tender</span>
+                {% elif invitation.status == 'DECLINED' %}
+                <span class="badge bg-danger">Won't Tender</span>
+                {% else %}
+                <span class="badge bg-warning">Pending</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if invitation.email_opened %}
+                  <span class="badge bg-info">Opened</span>
+                  <br><small>{{ invitation.email_opened|date:"d/m/Y H:i" }}</small>
+                {% else %}
+                  <span class="badge bg-secondary">Not Opened</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if invitation.documents_downloaded %}
+                <span class="badge bg-info">Downloaded</span>
+                {% if invitation.documents_downloaded_at %}
+                  <br><small>{{ invitation.documents_downloaded_at|date:"d/m/Y H:i" }}</small>
+                {% endif %}
+                {% else %}
+                <span class="badge bg-secondary">Not Downloaded</span>
+                {% endif %}
+              </td>
+                <td>
+                  {% if invitation.tender_returned %}
+                    <span class="badge bg-success">
+                      ✓ Returned
+                      {% if invitation.tender_returned_at %}
+                        <br><small>{{ invitation.tender_returned_at|date:"d/m/Y H:i" }}</small>
+                      {% endif %}
+                      {% if invitation.tender_attachments %}
+                        <br><small>{{ invitation.tender_attachments.count }} files</small>
+                        {% if invitation.tender_attachments.matched_by %}
+                          <br><small class="text-muted">{{ invitation.tender_attachments.matched_by }}</small>
+                        {% endif %}
+                      {% endif %}
+                    </span>
+                  {% else %}
+                    <!-- Clickable "Not Returned" badge -->
+                    <span class="badge bg-secondary"
+                          style="cursor: pointer;"
+                          onclick="showReturnModal({{ invitation.id }}, '{{ invitation.subcontractor.company|escapejs }}')">
+                      Not Returned
+                    </span>
+                  {% endif %}
+                </td>
+              <td>
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#notesModal{{ invitation.id }}">
+                  <i class="bi bi-pencil"></i> Notes
+                  {% if invitation.notes %}
+                  <span class="badge bg-info">1</span>
+                  {% endif %}
+                </button>
+            <!-- Notes Modal -->
+            <div class="modal fade" id="notesModal{{ invitation.id }}" tabindex="-1" aria-labelledby="notesModalLabel{{ invitation.id }}" aria-hidden="true">
+              <div class="modal-dialog">
+                <div class="modal-content">
+                  <div class="modal-header">
+                    <h5 class="modal-title" id="notesModalLabel{{ invitation.id }}">Notes for {{ invitation.subcontractor.company }}</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                  </div>
+                  <div class="modal-body">
+                    <textarea id="notes{{ invitation.id }}" class="form-control" rows="5">{{ invitation.notes }}</textarea>
+                  </div>
+                  <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="saveNotes({{ invitation.id }})">Save Notes</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </td>
+          <td>
+            <div class="btn-group">
+              <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown">
+                <i class="bi bi-gear"></i> Actions
+              </button>
+              <ul class="dropdown-menu">
+                <!-- Original Invitation -->
+                <li><a class="dropdown-item" href="{% url 'tenders:resend_invitation' invitation.id %}">
+                  <i class="bi bi-send"></i> Resend Invitation
+                </a></li>
+
+                <!-- Reminder -->
+                <li><a class="dropdown-item" href="{% url 'tenders:send_reminder' invitation.id %}">
+                  <i class="bi bi-bell"></i> Send Reminder
+                </a></li>
+
+                <!-- View Subcontractor Details -->
+                <li><a class="dropdown-item" href="{% url 'subcontractors:detail' invitation.subcontractor.id %}">
+                  <i class="bi bi-person-circle"></i> View Details
+                </a></li>
+
+                <!-- Email Contact -->
+                <li><a class="dropdown-item" href="mailto:{{ invitation.subcontractor.email }}">
+                  <i class="bi bi-envelope"></i> Email Direct
+                </a></li>
+
+                {% if invitation.subcontractor.mobile %}
+                <!-- Call Contact -->
+                <li><a class="dropdown-item" href="tel:{{ invitation.subcontractor.mobile }}">
+                  <i class="bi bi-telephone"></i> Call
+                </a></li>
+                {% endif %}
+
+                <li><hr class="dropdown-divider"></li>
+
+                <!-- Change Status Manually -->
+                {% if invitation.status == 'PENDING' %}
+                <li><button class="dropdown-item" onclick="updateStatus({{ invitation.id }}, 'ACCEPTED')">
+                  <i class="bi bi-check-circle text-success"></i> Mark as Will Tender
+                </button></li>
+                <li><button class="dropdown-item" onclick="updateStatus({{ invitation.id }}, 'DECLINED')">
+                  <i class="bi bi-x-circle text-danger"></i> Mark as Won't Tender
+                </button></li>
+                {% else %}
+                <li><button class="dropdown-item" onclick="updateStatus({{ invitation.id }}, 'PENDING')">
+                  <i class="bi bi-arrow-clockwise"></i> Reset to Pending
+                </button></li>
+                {% endif %}
+              </ul>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+  </div>
+</div>
+<!-- Status Update Modal -->
+<div class="modal fade" id="statusUpdateModal" tabindex="-1" aria-labelledby="statusUpdateModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="statusUpdateModalLabel">Update Invitation Status</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>Are you sure you want to update the invitation status?</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirmStatusUpdate">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+  <div id="notesSuccessToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-delay="2000">
+    <div class="toast-header bg-success text-white">
+      <strong class="me-auto">Success</strong>
+      <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+    </div>
+    <div class="toast-body">
+      Notes saved successfully!
+    </div>
+  </div>
+  <!-- Email Check Toast -->
+{% if request.GET.email_check %}
+  <div id="emailCheckToast" class="toast show" role="alert" aria-live="assertive" aria-atomic="true" data-bs-delay="3000">
+    <div class="toast-header {% if request.GET.email_check == 'success' %}bg-success{% else %}bg-danger{% endif %} text-white">
+      <strong class="me-auto">Email Check</strong>
+      <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+    </div>
+    <div class="toast-body">
+      {% if request.GET.email_check == 'success' %}
+        Email folder check completed successfully.
+      {% else %}
+        Error checking email folder. Please try again.
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+<!-- Single Modal for Marking Tender as Returned -->
+<div class="modal fade" id="returnModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title">Mark Tender as Returned</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small mb-3">
+          <strong id="modalSubcontractorName"></strong><br>
+          {{ project.name }}
+        </p>
+        <div class="d-grid gap-2">
+          <button type="button" class="btn btn-success btn-sm w-100" onclick="markAsReturned()">
+            ✓ Mark as Returned
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+let currentInvitationId = null;
+
+function showReturnModal(invitationId, subcontractorName) {
+    currentInvitationId = invitationId;
+    document.getElementById('modalSubcontractorName').textContent = subcontractorName;
+
+    const modal = new bootstrap.Modal(document.getElementById('returnModal'));
+    modal.show();
+}
+
+function markAsReturned() {
+    if (!currentInvitationId) {
+        alert('Error: No invitation selected');
+        return;
+    }
+
+    // Show loading state
+    const button = event.target;
+    const originalText = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Marking...';
+
+    // Send request
+    fetch(`/tenders/invitation/${currentInvitationId}/toggle-returned/`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-CSRFToken': getCookie('csrftoken')
+        },
+        body: 'status=returned'
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return response.text(); // Handle as text since Django redirect
+    })
+    .then(() => {
+        // Success - close modal and reload page
+        const modal = bootstrap.Modal.getInstance(document.getElementById('returnModal'));
+        modal.hide();
+
+        // Show success message
+        showNotification('✓ Tender marked as returned successfully', 'success');
+
+        // Reload page after short delay
+        setTimeout(() => {
+            window.location.reload();
+        }, 1000);
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showNotification('Error marking tender as returned: ' + error.message, 'danger');
+    })
+    .finally(() => {
+        // Reset button
+        button.disabled = false;
+        button.innerHTML = originalText;
+    });
+}
+
+// Helper function to get CSRF token
+function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i].trim();
+            if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
+        }
+    }
+    return cookieValue;
+}
+
+// Helper function to show notifications
+function showNotification(message, type = 'success') {
+    // Remove existing notifications
+    const existing = document.querySelector('.alert-notification');
+    if (existing) existing.remove();
+
+    // Create new notification
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert alert-${type} alert-dismissible fade show alert-notification`;
+    alertDiv.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+    alertDiv.innerHTML = `
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+
+    document.body.appendChild(alertDiv);
+
+    // Auto-hide after 3 seconds
+    setTimeout(() => {
+        if (alertDiv.parentNode) {
+            alertDiv.remove();
+        }
+    }, 3000);
+}
+</script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Auto-fill sender email when subcontractor is selected
+    document.getElementById('subcontractor_select').addEventListener('change', function() {
+        const selectedOption = this.options[this.selectedIndex];
+        const email = selectedOption.getAttribute('data-email');
+        if (email) {
+            document.getElementById('sender_email').value = email;
+        }
+    });
+
+    // Handle manual match form submission
+    document.getElementById('manualMatchForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+
+        const subcontractorId = document.getElementById('subcontractor_select').value;
+        const senderEmail = document.getElementById('sender_email').value;
+        const notes = document.getElementById('match_notes').value;
+
+        if (!subcontractorId || !senderEmail) {
+            alert('Please select a subcontractor and enter the sender email.');
+            return;
+        }
+
+        const data = {
+            project_id: {{ project.id }},
+            subcontractor_id: subcontractorId,
+            sender_email: senderEmail,
+            notes: notes
+        };
+
+        // Show loading state
+        const submitBtn = this.querySelector('button[type="submit"]');
+        const originalText = submitBtn.innerHTML;
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Recording...';
+
+        // Send the request
+        fetch('{% url "communications:manual_tender_return" %}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+            },
+            body: JSON.stringify(data)
+        })
+        .then(response => response.json())
+        .then(result => {
+            if (result.success) {
+                // Show success message
+                const alertDiv = document.createElement('div');
+                alertDiv.className = 'alert alert-success alert-dismissible fade show';
+                alertDiv.innerHTML = `
+                    <i class="bi bi-check-circle"></i> ${result.message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                `;
+
+                // Insert at top of page
+                document.querySelector('.container-fluid').insertBefore(
+                    alertDiv,
+                    document.querySelector('.container-fluid').firstChild
+                );
+
+                // Close modal and reset form
+                const modal = bootstrap.Modal.getInstance(document.getElementById('manualMatchModal'));
+                modal.hide();
+                this.reset();
+
+                // Reload page after 2 seconds to show updated data
+                setTimeout(() => {
+                    window.location.reload();
+                }, 2000);
+
+            } else {
+                alert('Error: ' + result.error);
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('An error occurred while recording the tender return.');
+        })
+        .finally(() => {
+            // Reset button
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalText;
+        });
+    });
+});
+</script>
+<script>
+// Function to update invitation status
+function updateStatus(invitationId, newStatus) {
+    const modal = new bootstrap.Modal(document.getElementById('statusUpdateModal'));
+    modal.show();
+
+    document.getElementById('confirmStatusUpdate').onclick = function() {
+        fetch(`/tenders/invitation/${invitationId}/update-status/`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token }}',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                status: newStatus
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                window.location.reload();
+            } else {
+                alert('Error updating status: ' + data.error);
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Error updating status');
+        });
+
+        modal.hide();
+    };
+}
+
+function saveNotes(invitationId) {
+    const notes = document.getElementById(`notes${invitationId}`).value;
+
+    fetch(`/tenders/invitation/${invitationId}/update-notes/`, {
+        method: 'POST',
+        headers: {
+            'X-CSRFToken': '{{ csrf_token }}',
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            notes: notes
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Close the modal
+            const modal = bootstrap.Modal.getInstance(document.getElementById(`notesModal${invitationId}`));
+            modal.hide();
+
+            // Show success message
+            const toast = new bootstrap.Toast(document.getElementById('notesSuccessToast'));
+            toast.show();
+
+            // Reload page after a short delay to show updated data
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
+        } else {
+            alert('Error saving notes: ' + data.error);
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Error saving notes');
+    });
+}
+
+// Function to send email with link to the tender tracking page
+function openEmailWithLink() {
+    fetch(`/tenders/project/{{ project.id }}/email-link/`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Open email client with pre-filled email
+                window.open(data.mailto_url, '_blank');
+            } else {
+                alert('Error generating email: ' + data.error);
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Error generating email: ' + error.message);
+        });
+}
+
+// Auto-hide the email check toast after 5 seconds
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize all toasts
+    const toastElList = [].slice.call(document.querySelectorAll('.toast'));
+    toastElList.map(function(toastEl) {
+        return new bootstrap.Toast(toastEl, {
+            autohide: true,
+            delay: 5000
+        });
+    });
+});
+</script>
+{% endblock %}

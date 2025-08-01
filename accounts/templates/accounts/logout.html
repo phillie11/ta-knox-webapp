@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Logged Out - CRM System{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-md-6 col-lg-4">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">Logged Out</h4>
+            </div>
+            <div class="card-body">
+                <p class="mb-3">You have been successfully logged out.</p>
+                <div class="d-grid gap-2">
+                    <a href="{% url 'accounts:login' %}" class="btn btn-primary">Log in again</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

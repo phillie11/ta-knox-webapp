@@ -1,0 +1,232 @@
+<!-- tenders/templates/tenders/standalone_document_download.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Download Documents - {{ project.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f8f9fa; }
+        .download-card { border-radius: 15px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1); }
+        .download-btn { 
+            background: linear-gradient(45deg, #007bff, #0056b3);
+            border: none;
+            border-radius: 10px;
+            padding: 15px 30px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        .download-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0, 123, 255, 0.3);
+        }
+        .spinner { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <!-- Company Logo -->
+                <div class="text-center mb-4">
+                    <img src="https://www.taknox.co.uk/wp-content/uploads/2020/09/taknox-logo.png" alt="TA Knox Logo" height="60">
+                </div>
+
+                <div class="card download-card">
+                    <div class="card-header bg-primary text-white">
+                        <h4 class="mb-0">
+                            <i class="bi bi-download me-2"></i>
+                            Download Tender Documents
+                        </h4>
+                    </div>
+                    <div class="card-body p-4">
+                        <!-- Project Information -->
+                        <div class="alert alert-info">
+                            <h5 class="alert-heading">{{ project.name }}</h5>
+                            <p class="mb-1"><strong>For:</strong> {{ subcontractor.company }}</p>
+                            {% if project.location %}
+                                <p class="mb-0"><strong>Location:</strong> {{ project.location }}</p>
+                            {% endif %}
+                        </div>
+
+                        <!-- Document Information -->
+                        <div class="mb-4">
+                            {% if project.sharepoint_documents_link %}
+                                <div class="d-flex align-items-center mb-3">
+                                    <i class="bi bi-cloud-arrow-down text-primary me-3" style="font-size: 2rem;"></i>
+                                    <div>
+                                        <h6 class="mb-1">{{ sharepoint_description }}</h6>
+                                        <p class="text-muted mb-0">Access tender files via SharePoint</p>
+                                    </div>
+                                </div>
+                            {% elif has_files %}
+                                <div class="d-flex align-items-center mb-3">
+                                    <i class="bi bi-file-earmark-zip text-primary me-3" style="font-size: 2rem;"></i>
+                                    <div>
+                                        <h6 class="mb-1">Tender Documents ({{ document_count }} file{{ document_count|pluralize }})</h6>
+                                        <p class="text-muted mb-0">Files will be downloaded as a ZIP package</p>
+                                    </div>
+                                </div>
+                            {% else %}
+                                <div class="alert alert-warning">
+                                    <i class="bi bi-exclamation-triangle me-2"></i>
+                                    No documents are currently available.
+                                </div>
+                            {% endif %}
+                        </div>
+
+                        <!-- Download Button -->
+                        {% if project.sharepoint_documents_link or has_files %}
+                            <div class="text-center mb-4">
+                                <button id="downloadBtn" class="btn btn-primary download-btn">
+                                    <i class="bi bi-folder2-open me-2"></i>
+                                    <span class="btn-text">Access Tender Files</span>
+                                    <div class="spinner spinner-border spinner-border-sm ms-2" role="status">
+                                        <span class="visually-hidden">Loading...</span>
+                                    </div>
+                                </button>
+                            </div>
+
+                            <!-- Status Messages -->
+                            <div id="statusMessage" class="alert" style="display: none;"></div>
+                        {% endif %}
+
+                        <!-- Important Notes -->
+                        <div class="card bg-light">
+                            <div class="card-body">
+                                <h6 class="card-title">
+                                    <i class="bi bi-info-circle text-info me-2"></i>
+                                    Important Notes
+                                </h6>
+                                <ul class="mb-0">
+                                    <li>This link is for your use only</li>
+                                    <li>Please review all documents carefully before tendering</li>
+                                    {% if project.tender_deadline %}
+                                        <li><strong>Deadline:</strong> {{ project.tender_deadline|date:"d/m/Y H:i" }}</li>
+                                    {% endif %}
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Footer -->
+                <div class="text-center mt-4">
+                    <p class="text-muted">
+                        <small>&copy; {{ "now"|date:"Y" }} TA Knox Ltd. Secure document download system.</small>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const downloadBtn = document.getElementById('downloadBtn');
+            const statusMessage = document.getElementById('statusMessage');
+            const spinner = downloadBtn.querySelector('.spinner');
+            const btnText = downloadBtn.querySelector('.btn-text');
+
+            if (downloadBtn) {
+                downloadBtn.addEventListener('click', function() {
+                    // Disable button and show spinner
+                    downloadBtn.disabled = true;
+                    spinner.style.display = 'inline-block';
+                    btnText.textContent = 'Opening Files...';
+
+                    // Create a simple form data request instead of JSON
+                    const formData = new FormData();
+                    formData.append('confirm_download', 'true');
+
+                    // Send download confirmation using form data (no CSRF token needed)
+                    fetch(window.location.href, {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log('Response received:', data);
+                        
+                        if (data.success) {
+                            showStatus(data.message || 'Opening tender files...', 'success');
+                            
+                            // Handle different download types
+                            if (data.download_type === 'redirect' && data.redirect_url) {
+                                // Direct SharePoint link - open in current window
+                                console.log('Redirecting to:', data.redirect_url);
+                                window.location.href = data.redirect_url;
+                                
+                            } else if (data.download_url) {
+                                // File download - open in new window
+                                console.log('Downloading from:', data.download_url);
+                                window.location.href = data.download_url;
+                            }
+
+                            // Update button to show success
+                            setTimeout(() => {
+                                btnText.textContent = 'Files Accessed';
+                                downloadBtn.className = 'btn btn-success download-btn';
+                                downloadBtn.innerHTML = '<i class="bi bi-check-circle me-2"></i>Files Accessed';
+                            }, 1500);
+
+                        } else {
+                            console.error('Server returned error:', data.error);
+                            showStatus('Error: ' + (data.error || 'Unknown error occurred'), 'danger');
+                            resetButton();
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Network or parsing error:', error);
+                        showStatus('Unable to access files. Please try again or contact support.', 'danger');
+                        resetButton();
+                    });
+                });
+            }
+
+            function showStatus(message, type) {
+                statusMessage.className = `alert alert-${type}`;
+                statusMessage.textContent = message;
+                statusMessage.style.display = 'block';
+                
+                // Auto-hide success messages after 5 seconds
+                if (type === 'success') {
+                    setTimeout(() => {
+                        statusMessage.style.display = 'none';
+                    }, 5000);
+                }
+            }
+
+            function resetButton() {
+                downloadBtn.disabled = false;
+                spinner.style.display = 'none';
+                btnText.textContent = 'Access Tender Files';
+                downloadBtn.className = 'btn btn-primary download-btn';
+            }
+        });
+
+        // Fallback: If SharePoint link exists, add direct access option
+        {% if project.sharepoint_documents_link %}
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add a fallback direct link if JavaScript fails
+            const fallbackLink = document.createElement('p');
+            fallbackLink.className = 'text-center mt-3';
+            fallbackLink.innerHTML = '<small class="text-muted">Having trouble? <a href="{{ project.sharepoint_documents_link }}" target="_blank">Click here to access documents directly</a></small>';
+            
+            const cardBody = document.querySelector('.card-body');
+            if (cardBody) {
+                cardBody.appendChild(fallbackLink);
+            }
+        });
+        {% endif %}
+    </script>
+</body>
+</html>

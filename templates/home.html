@@ -1,0 +1,46 @@
+<!-- In home.html - Update the card links -->
+{% extends 'base.html' %}
+
+{% block title %}CRM System - Home{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h1 class="mb-4">Welcome to the CRM System</h1>
+    
+    {% if user.is_authenticated %}
+        <div class="row">
+            <div class="col-md-4">
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Subcontractors</h5>
+                        <p class="card-text">Manage your subcontractor database.</p>
+                        <a href="{% url 'subcontractors:list' %}" class="btn btn-primary">Go to Subcontractors</a>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Projects</h5>
+                        <p class="card-text">Manage your construction projects.</p>
+                        <a href="{% url 'projects:list' %}" class="btn btn-primary">Go to Projects</a>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Tender Tracker</h5>
+                        <p class="card-text">Track tender projects and monitor deadlines.</p>
+                        <a href="{% url 'project_tracker:list' %}" class="btn btn-primary">Go to Tender Tracker</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    {% else %}
+        <div class="alert alert-info">
+            Please <a href="{% url 'accounts:login' %}">login</a> to access the CRM system.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

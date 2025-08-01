@@ -1,0 +1,55 @@
+<!-- Updated navbar.html with correct login link -->
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="{% url 'home' %}">CRM System</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav"
+                aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav me-auto">
+                <li class="nav-item">
+                    <a class="nav-link" href="{% url 'home' %}">Home</a>
+                </li>
+                {% if user.is_authenticated %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'projects:list' %}">Projects</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'subcontractors:list' %}">Subcontractors</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'project_tracker:list' %}">Tender Tracker</a>
+                    </li>
+                {% endif %}
+            </ul>
+            <ul class="navbar-nav">
+                {% if user.is_authenticated %}
+                    <li class="nav-item">
+                        <span class="nav-link">{{ user.username }}</span>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'accounts:logout' %}">Logout</a>
+                    </li>
+                {% else %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'accounts:login' %}" id="loginLink">Login</a>
+                    </li>
+                {% endif %}
+            </ul>
+        </div>
+    </div>
+</nav>
+<!-- Add this JavaScript at the end of your navbar.html file or in a separate JS file -->
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Add click event listener to login link
+    const loginLink = document.getElementById('loginLink');
+    if (loginLink) {
+        loginLink.addEventListener('click', function(event) {
+            console.log('Login link clicked');
+            // You can add additional logging or functionality here
+        });
+    }
+});
+</script>

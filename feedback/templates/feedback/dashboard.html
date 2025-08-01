@@ -1,0 +1,52 @@
+<!-- feedback/templates/feedback/dashboard.html -->
+{% extends 'base.html' %}
+
+{% block title %}Feedback Analysis Dashboard{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>Feedback Analysis Dashboard</h1>
+    
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Upload Feedback File</h5>
+                </div>
+                <div class="card-body">
+                    <p>Upload an Excel (.xlsx, .xls) or CSV file containing feedback data for analysis.</p>
+                    <a href="{% url 'feedback:upload' %}" class="btn btn-primary">
+                        <i class="bi bi-upload"></i> Upload File
+                    </a>
+                    <a href="{% url 'feedback:test' %}" class="btn btn-outline-secondary ms-2">
+                        <i class="bi bi-gear"></i> Test Analysis
+                    </a>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Quick Actions</h5>
+                </div>
+                <div class="card-body">
+                    {% if request.session.feedback_analysis %}
+                        <a href="{% url 'feedback:results' %}" class="btn btn-success btn-sm d-block mb-2">
+                            <i class="bi bi-eye"></i> View Results
+                        </a>
+                        <a href="{% url 'feedback:export' %}" class="btn btn-info btn-sm d-block mb-2">
+                            <i class="bi bi-download"></i> Export CSV
+                        </a>
+                        <a href="{% url 'feedback:clear' %}" class="btn btn-warning btn-sm d-block">
+                            <i class="bi bi-trash"></i> Clear Data
+                        </a>
+                    {% else %}
+                        <p class="text-muted">No analysis data available. Upload a file to get started.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

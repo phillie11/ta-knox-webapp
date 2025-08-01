@@ -1,0 +1,247 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Subcontractor Feedback - CRM System{% endblock %}
+
+{% block extra_css %}
+<style>
+.stats-card {
+    transition: transform 0.2s;
+}
+.stats-card:hover {
+    transform: translateY(-5px);
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>Subcontractor Feedback</h1>
+        <div>
+            <a href="{% url 'feedback:upload_spreadsheet' %}" class="btn btn-primary">
+                <i class="bi bi-upload"></i> Upload Comparison Spreadsheet
+            </a>
+        </div>
+    </div>
+
+    <!-- Stats Cards -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card bg-primary text-white stats-card mb-3">
+                <div class="card-body text-center">
+                    <h2 class="display-4">{{ stats.total }}</h2>
+                    <p class="mb-0">Total Feedback Records</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-success text-white stats-card mb-3">
+                <div class="card-body text-center">
+                    <h2 class="display-4">{{ stats.sent }}</h2>
+                    <p class="mb-0">Sent Successfully</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-warning text-white stats-card mb-3">
+                <div class="card-body text-center">
+                    <h2 class="display-4">{{ stats.pending }}</h2>
+                    <p class="mb-0">Pending</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-danger text-white stats-card mb-3">
+                <div class="card-body text-center">
+                    <h2 class="display-4">{{ stats.failed }}</h2>
+                    <p class="mb-0">Failed</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3">
+                <div class="col-md-4">
+                    <label for="project" class="form-label">Project</label>
+                    <select name="project" id="project" class="form-select" onchange="this.form.submit()">
+                        <option value="">All Projects</option>
+                        {% for project in projects %}
+                            <option value="{{ project.id }}" {% if current_project == project.id|stringformat:"s" %}selected{% endif %}>
+                                {{ project.name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label for="status" class="form-label">Status</label>
+                    <select name="status" id="status" class="form-select" onchange="this.form.submit()">
+                        <option value="">All Statuses</option>
+                        {% for status_code, status_name in status_choices %}
+                            <option value="{{ status_code }}" {% if current_status == status_code %}selected{% endif %}>
+                                {{ status_name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4 d-flex align-items-end">
+                    <button type="submit" class="btn btn-primary me-2">
+                        <i class="bi bi-filter"></i> Apply Filters
+                    </button>
+                    <a href="{% url 'feedback:feedback_list' %}" class="btn btn-outline-secondary">
+                        <i class="bi bi-x-circle"></i> Clear Filters
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Send Pending Emails Button -->
+    {% if stats.pending > 0 %}
+        <div class="card mb-4 bg-light">
+            <div class="card-body">
+                <form method="post" action="{% url 'feedback:send_feedback' %}" class="d-flex justify-content-between align-items-center">
+                    {% csrf_token %}
+                    {% if current_project %}
+                        <input type="hidden" name="project_id" value="{{ current_project }}">
+                    {% endif %}
+                    <p class="mb-0">
+                        You have <strong>{{ stats.pending }}</strong> pending feedback emails
+                        {% if current_project %}for this project{% endif %}.
+                    </p>
+                    <button type="submit" class="btn btn-success">
+                        <i class="bi bi-envelope"></i> Send All Pending Emails
+                    </button>
+                </form>
+            </div>
+        </div>
+    {% endif %}
+
+    <!-- Feedback List Table -->
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Project</th>
+                        <th>Subcontractor</th>
+                        <th>Trade</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                        <th>Sent</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for feedback in feedback_records %}
+                        <tr>
+                            <td>
+                                <a href="{% url 'projects:detail' feedback.project.id %}">{{ feedback.project.name }}</a>
+                            </td>
+                            <td>
+                                <div class="fw-semibold">{{ feedback.subcontractor.company }}</div>
+                                <div class="small text-muted">{{ feedback.subcontractor.email }}</div>
+                            </td>
+                            <td>{{ feedback.trade }}</td>
+                            <td>
+                                {% if feedback.status == 'SENT' %}
+                                    <span class="badge bg-success">Sent</span>
+                                {% elif feedback.status == 'PENDING' %}
+                                    <span class="badge bg-warning">Pending</span>
+                                {% else %}
+                                    <span class="badge bg-danger">Failed</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ feedback.created_at|date:"d/m/Y H:i" }}</td>
+                            <td>
+                                {% if feedback.sent_at %}
+                                    {{ feedback.sent_at|date:"d/m/Y H:i" }}
+                                {% else %}
+                                    <span class="text-muted">Not sent</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="btn-group">
+                                    <a href="{% url 'feedback:feedback_detail' feedback.id %}" class="btn btn-sm btn-outline-primary">
+                                        <i class="bi bi-eye"></i> View
+                                    </a>
+                                    {% if feedback.status == 'PENDING' %}
+                                        <form method="post" action="{% url 'feedback:send_single_feedback' feedback.id %}" style="display: inline;">
+                                            {% csrf_token %}
+                                            <button type="submit" class="btn btn-sm btn-outline-success">
+                                                <i class="bi bi-envelope"></i> Send
+                                            </button>
+                                        </form>
+                                    {% elif feedback.status == 'FAILED' %}
+                                        <form method="post" action="{% url 'feedback:resend_feedback' feedback.id %}" style="display: inline;">
+                                            {% csrf_token %}
+                                            <button type="submit" class="btn btn-sm btn-outline-warning">
+                                                <i class="bi bi-arrow-clockwise"></i> Retry
+                                            </button>
+                                        </form>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="7" class="text-center py-4">
+                                <div class="text-muted">No feedback records found.</div>
+                                <a href="{% url 'feedback:upload_spreadsheet' %}" class="btn btn-primary mt-2">
+                                    <i class="bi bi-upload"></i> Upload Comparison Spreadsheet
+                                </a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Pagination -->
+    {% if is_paginated %}
+        <nav aria-label="Page navigation" class="mt-4">
+            <ul class="pagination justify-content-center">
+                {% if page_obj.has_previous %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page=1{% if request.GET.project %}&project={{ request.GET.project }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}" aria-label="First">
+                            <span aria-hidden="true">&laquo;&laquo;</span>
+                        </a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if request.GET.project %}&project={{ request.GET.project }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}" aria-label="Previous">
+                            <span aria-hidden="true">&laquo;</span>
+                        </a>
+                    </li>
+                {% endif %}
+
+                {% for num in page_obj.paginator.page_range %}
+                    {% if page_obj.number == num %}
+                        <li class="page-item active"><a class="page-link" href="#">{{ num }}</a></li>
+                    {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                        <li class="page-item">
+                            <a class="page-link" href="?page={{ num }}{% if request.GET.project %}&project={{ request.GET.project }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}">{{ num }}</a>
+                        </li>
+                    {% endif %}
+                {% endfor %}
+
+                {% if page_obj.has_next %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if request.GET.project %}&project={{ request.GET.project }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}" aria-label="Next">
+                            <span aria-hidden="true">&raquo;</span>
+                        </a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{% if request.GET.project %}&project={{ request.GET.project }}{% endif %}{% if request.GET.status %}&status={{ request.GET.status }}{% endif %}" aria-label="Last">
+                            <span aria-hidden="true">&raquo;&raquo;</span>
+                        </a>
+                    </li>
+                {% endif %}
+            </ul>
+        </nav>
+    {% endif %}
+</div>
+{% endblock %}

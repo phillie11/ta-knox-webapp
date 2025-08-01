@@ -1,0 +1,438 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Project Analytics - CRM System{% endblock %}
+
+
+{% block extra_css %}
+<style>
+  .analytics-card {
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s;
+  }
+  .analytics-card:hover {
+    transform: translateY(-5px);
+  }
+  .stat-value {
+    font-size: 2.5rem;
+    font-weight: 700;
+  }
+  .stat-label {
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .chart-container {
+    height: 400px;
+    position: relative;
+  }
+  .chart-error {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 80%;
+    text-align: center;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>Project Analytics Dashboard</h1>
+    <div>
+      <a href="{% url 'project_tracker:list' %}" class="btn btn-outline-primary me-2">
+        <i class="bi bi-kanban"></i> Tender Tracker
+      </a>
+      <a href="{% url 'tenders:list' %}" class="btn btn-primary">
+        <i class="bi bi-folder-plus"></i> View Projects
+      </a>
+    </div>
+  </div>
+
+  <!-- Key Stats -->
+  <div class="row mb-4">
+    <div class="col-md-3">
+      <div class="card analytics-card bg-primary text-white mb-4">
+        <div class="card-body text-center p-4">
+          <div class="stat-value">{{ success_rate }}%</div>
+          <div class="stat-label">Success Rate</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card analytics-card bg-success text-white mb-4">
+        <div class="card-body text-center p-4">
+          <div class="stat-value" id="successful-bids-count" data-count="{{ successful_bids }}">{{ successful_bids }}</div>
+          <div class="stat-label">Successful Bids</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card analytics-card bg-danger text-white mb-4">
+        <div class="card-body text-center p-4">
+          <div class="stat-value" id="unsuccessful-bids-count" data-count="{{ unsuccessful_bids }}">{{ unsuccessful_bids }}</div>
+          <div class="stat-label">Unsuccessful Bids</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card analytics-card bg-info text-white mb-4">
+        <div class="card-body text-center p-4">
+          <div class="stat-value">{{ avg_margin_successful|floatformat:1 }}%</div>
+          <div class="stat-label">Avg. Winning Margin</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="row">
+    <div class="col-md-6">
+      <div class="card mb-4">
+        <div class="card-header bg-primary">
+          <h5 class="mb-0">Success by Margin</h5>
+        </div>
+        <div class="card-body">
+          <div class="chart-container bg-light">
+            <!-- Canvas must be directly in the container -->
+            <canvas id="margin-chart"></canvas>
+            {% if not margin_chart_data or margin_chart_data == '[]' %}
+              <div class="chart-error alert alert-info">No margin data available yet. Complete more projects to see analysis.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card mb-4">
+        <div class="card-header bg-primary">
+          <h5 class="mb-0">Bid Distribution</h5>
+        </div>
+        <div class="card-body">
+          <div class="chart-container">
+            <!-- Canvas must be directly in the container -->
+            <canvas id="bid-distribution-chart"></canvas>
+            {% if successful_bids == 0 and unsuccessful_bids == 0 %}
+              <div class="chart-error alert alert-info">No bid data available yet. Complete more projects to see distribution.</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Project Success Table -->
+  <div class="card">
+    <div class="card-header bg-primary">
+      <h5 class="mb-0">Project Success Analysis</h5>
+    </div>
+    <div class="table-responsive">
+      <table class="table align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Project</th>
+            <th>Client</th>
+            <th>Bid Amount</th>
+            <th>Margin</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+{% for project in projects %}
+  <tr>
+    <td>{{ project.name }}</td>
+    <td>{{ project.location }}</td>  <!-- Use location instead of client -->
+    <td>{% if project.tender_bid_amount %}£{{ project.tender_bid_amount|floatformat:2 }}{% else %}-{% endif %}</td>
+    <td>{% if project.margin_percentage %}{{ project.margin_percentage }}%{% else %}-{% endif %}</td>
+    <td>
+      {% if project.status == 'SUCCESSFUL' %}
+        <span class="badge bg-success">Won</span>
+      {% elif project.status == 'UNSUCCESSFUL' %}
+        <span class="badge bg-danger">Lost</span>
+      {% else %}
+        <span class="badge bg-secondary">{{ project.status }}</span>
+      {% endif %}
+    </td>
+  </tr>
+{% empty %}
+  <tr>
+    <td colspan="5" class="text-center py-4">
+      <div class="text-muted">No completed projects found.</div>
+    </td>
+  </tr>
+{% endfor %}
+
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Hidden input with chart data for debug purposes -->
+<input type="hidden" id="margin-chart-data-debug" value="{{ margin_chart_data|escape }}">
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    console.log("Analytics script loaded");
+
+    try {
+      // Get canvas elements
+      const marginChartCanvas = document.getElementById('margin-chart');
+      const bidDistChartCanvas = document.getElementById('bid-distribution-chart');
+
+      if (!marginChartCanvas || !bidDistChartCanvas) {
+        console.error("Canvas elements not found:", {
+          'margin-chart': !!marginChartCanvas,
+          'bid-distribution-chart': !!bidDistChartCanvas
+        });
+        return;
+      }
+
+      console.log("Canvas elements found and ready");
+
+      // Parse the margin chart data
+      const marginChartData = JSON.parse('{{ margin_chart_data|escapejs }}');
+      console.log("Margin chart data parsed:", marginChartData);
+
+      // Process data for both charts
+      if (marginChartData && marginChartData.length > 0) {
+        // Data for scatter plot
+        const successfulData = [];
+        const unsuccessfulData = [];
+
+        // Calculate totals for bid distribution chart
+        let successfulTotal = 0;
+        let unsuccessfulTotal = 0;
+
+        marginChartData.forEach(d => {
+          const point = {
+            x: d.margin,
+            y: d.amount,
+            project: d.name
+          };
+
+          if (d.successful) {
+            successfulData.push(point);
+            successfulTotal += d.amount;
+          } else {
+            unsuccessfulData.push(point);
+            unsuccessfulTotal += d.amount;
+          }
+        });
+
+        console.log("Processed chart data:", {
+          successful: successfulData.length,
+          unsuccessful: unsuccessfulData.length,
+          successfulTotal: successfulTotal,
+          unsuccessfulTotal: unsuccessfulTotal
+        });
+
+        // Format the totals for display
+        const formatCurrency = (value) => {
+          return new Intl.NumberFormat('en-GB', {
+            style: 'currency',
+            currency: 'GBP',
+            maximumFractionDigits: 0,
+            minimumFractionDigits: 0
+          }).format(value);
+        };
+
+        const successfulTotalFormatted = formatCurrency(successfulTotal);
+        const unsuccessfulTotalFormatted = formatCurrency(unsuccessfulTotal);
+
+        // 1. Create the Margin Chart (Scatter)
+        const marginCtx = marginChartCanvas.getContext('2d');
+        const scatterChart = new Chart(marginCtx, {
+          type: 'scatter',
+          data: {
+            datasets: [
+              {
+                label: 'Successful Bids',
+                data: successfulData,
+                backgroundColor: 'rgba(40, 167, 69, 0.6)',
+                borderColor: '#28a745',
+                borderWidth: 1,
+                pointRadius: 8,
+                pointHoverRadius: 12
+              },
+              {
+                label: 'Unsuccessful Bids',
+                data: unsuccessfulData,
+                backgroundColor: 'rgba(220, 53, 69, 0.6)',
+                borderColor: '#dc3545',
+                borderWidth: 1,
+                pointRadius: 8,
+                pointHoverRadius: 12
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              x: {
+                title: {
+                  display: true,
+                  text: 'Margin (%)'
+                }
+              },
+              y: {
+                title: {
+                  display: true,
+                  text: 'Bid Amount (£)'
+                },
+                ticks: {
+                  callback: function(value) {
+                    return '£' + value.toLocaleString();
+                  }
+                }
+              }
+            },
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  label: function(context) {
+                    const point = context.raw;
+                    return `${point.project}: £${point.y.toLocaleString()} (${point.x}% margin)`;
+                  }
+                }
+              }
+            }
+          }
+        });
+
+        console.log("Scatter chart created successfully");
+
+        // 2. Create the Bid Distribution Chart (Pie)
+        // Get the counts for the pie chart
+        const successCount = {{ successful_bids }};
+        const unsuccessCount = {{ unsuccessful_bids }};
+
+        console.log("Bid counts for pie chart:", {
+          successful: successCount,
+          unsuccessful: unsuccessCount
+        });
+
+        if (successCount > 0 || unsuccessCount > 0) {
+          // Check for and destroy any existing chart
+          if (Chart.getChart(bidDistChartCanvas)) {
+            Chart.getChart(bidDistChartCanvas).destroy();
+          }
+
+          const bidDistCtx = bidDistChartCanvas.getContext('2d');
+
+          // Create a custom plugin for placing labels inside the pie chart segments
+          const pieLabelsPlugin = {
+            id: 'pieLabels',
+            afterDraw(chart, args, options) {
+              const { ctx, data } = chart;
+              ctx.save();
+
+              // Get meta for each segment
+              const dataset = chart.getDatasetMeta(0);
+
+              // Process each segment (arc)
+              dataset.data.forEach((arc, i) => {
+                // Get the center angle of this segment to place text
+                const angle = arc.startAngle + (arc.endAngle - arc.startAngle) / 2;
+
+                // Get the radius of the pie and calculate position for text
+                // Adjust the 0.7 value to move text closer to or further from the center
+                const radius = arc.outerRadius * 0.7;
+
+                // Calculate x,y position for the label
+                const x = arc.x + Math.cos(angle) * radius;
+                const y = arc.y + Math.sin(angle) * radius;
+
+                // Set up text properties
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillStyle = '#000000'; // Black text color
+
+                // Determine which segment we're drawing
+                const isSuccessful = i === 0;
+                const count = isSuccessful ? successCount : unsuccessCount;
+                const totalFormatted = isSuccessful ? successfulTotalFormatted : unsuccessfulTotalFormatted;
+
+                // Draw the heading ("Won" or "Lost")
+                ctx.font = 'bold 14px Arial';
+                ctx.fillText(isSuccessful ? 'Won' : 'Lost', x, y - 15);
+
+                // Draw the job count
+                ctx.font = '13px Arial';
+                ctx.fillText(`${count} jobs`, x, y + 5);
+
+                // Draw the total amount
+                ctx.fillText(`${totalFormatted}`, x, y + 25);
+              });
+
+              ctx.restore();
+            }
+          };
+
+          // Register the plugin
+          Chart.register(pieLabelsPlugin);
+
+          const bidDistChart = new Chart(bidDistCtx, {
+            type: 'pie',
+            data: {
+              labels: ['Won', 'Lost'],
+              datasets: [{
+                data: [successCount, unsuccessCount],
+                backgroundColor: [
+                  'rgba(40, 167, 69, 0.7)',
+                  'rgba(220, 53, 69, 0.7)'
+                ],
+                borderColor: [
+                  '#28a745',
+                  '#dc3545'
+                ],
+                borderWidth: 1
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: {
+                  display: false // Remove the legend
+                },
+                tooltip: {
+                  enabled: false // Disable tooltips
+                }
+              }
+            }
+          });
+
+          console.log("Pie chart created successfully");
+        } else {
+          console.warn("No bid distribution data available");
+          // Add a message to the chart container
+          const container = bidDistChartCanvas.parentElement;
+          const message = document.createElement('div');
+          message.className = 'chart-error alert alert-info';
+          message.textContent = 'No bid data available yet.';
+          container.appendChild(message);
+        }
+      } else {
+        console.warn("No margin chart data available");
+      }
+    } catch (e) {
+      console.error("Error initializing charts:", e);
+
+      // Display error message on the page
+      const errorDiv = document.createElement('div');
+      errorDiv.className = 'alert alert-danger';
+      errorDiv.textContent = 'Error loading charts. Please check the console for details.';
+
+      document.querySelector('.container-fluid').prepend(errorDiv);
+    }
+  });
+</script>
+{% endblock %}

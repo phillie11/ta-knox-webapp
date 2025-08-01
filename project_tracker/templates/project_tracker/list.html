@@ -1,0 +1,715 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Tender Tracker - CRM System{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://unpkg.com/vis-timeline@7.7.0/dist/vis-timeline-graph2d.min.css">
+<style>
+    /* Enhanced status tabs styling with blue background and white text */
+    .status-tabs .nav-link {
+        background-color: #343a40;
+        color: #adb5bd;
+        border-radius: 5px 5px 0 0;
+        margin-right: 3px;
+        padding: 8px 16px;
+        transition: all 0.2s ease;
+    }
+
+    .status-tabs .nav-link:hover {
+        background-color: #495057;
+        color: #fff;
+    }
+
+    .status-tabs .nav-link.active {
+        background-color: #0d6efd;
+        color: white;
+        font-weight: bold;
+        border-bottom: 3px solid #0d6efd;
+    }
+
+    /* Make the tab container match the dark theme */
+    .nav-tabs {
+        border-bottom: 1px solid #495057;
+    }
+
+    .timeline-container {
+        min-height: 400px;
+        height: auto;
+        margin-bottom: 30px;
+        background-color: #343a40;
+        border-radius: 4px;
+        position: relative;
+    }
+
+    .timeline-container.expanded {
+        min-height: 600px;
+    }
+
+    /* Timeline elements styling */
+    .vis-timeline {
+        border: none;
+        background-color: #343a40;
+    }
+
+    .vis-panel {
+        background-color: #343a40;
+    }
+
+    .vis-text, .vis-label {
+        color: #f8f9fa;
+    }
+
+    .vis-grid.vis-vertical,
+    .vis-grid.vis-horizontal {
+        border-color: #444;
+    }
+
+    .vis-time-axis .vis-text {
+        color: #adb5bd;
+        font-size: 12px;
+    }
+
+    /* Project bars styling */
+    .vis-item.vis-range.project-item {
+        background-color: #0d6efd;
+        border-color: #0b5ed7;
+        color: white;
+        border-radius: 3px;
+        font-weight: 500;
+    }
+
+    /* Groups styling */
+    .vis-label.project-group {
+        font-weight: bold;
+        color: #f8f9fa;
+        border-bottom: 1px solid #444;
+    }
+
+    /* FIX FOR MILESTONE DOTS - Critical styling fixes */
+    /* Remove all box duplicates */
+    .vis-item.vis-box.milestone {
+        display: none !important;
+    }
+
+    /* Make sure dots are properly sized and shaped */
+    .vis-item.vis-point.milestone {
+        border-radius: 50% !important;
+        width: 18px !important;
+        height: 18px !important;
+        margin-left: -9px !important;
+        margin-top: -9px !important;
+        border-width: 2px !important;
+        /* Force z-index higher than today line */
+        z-index: 110 !important;
+    }
+
+    /* Hide any content that makes dots double */
+    .vis-item.vis-point.milestone .vis-item-content,
+    .vis-item.vis-point.milestone .vis-dot {
+        display: none !important;
+    }
+
+    /* Milestone types specific colors */
+    .vis-item.milestone.win-room {
+        background-color: #ffc107 !important;
+        border-color: #ff9800 !important;
+    }
+
+    .vis-item.milestone.site-visit {
+        background-color: #198754 !important;
+        border-color: #157347 !important;
+    }
+
+    .vis-item.milestone.sc-deadline {
+        background-color: #dc3545 !important;
+        border-color: #bb2d3b !important;
+    }
+
+    .vis-item.milestone.mid-review {
+        background-color: #0dcaf0 !important;
+        border-color: #0bacce !important;
+    }
+
+    .vis-item.milestone.rfi {
+        background-color: #6f42c1 !important;
+        border-color: #4a1991 !important;
+    }
+
+    /* Today line styling */
+    .vis-current-time {
+        background-color: #dc3545 !important;
+        width: 2px !important;
+        z-index: 100 !important;
+    }
+
+    .vis-content {
+        height: auto !important;
+    }
+
+    /* Enhanced tooltip styling */
+    .timeline-tooltip {
+        padding: 0;
+        background-color: transparent;
+        border-radius: 4px;
+        font-size: 13px;
+        max-width: 300px;
+        z-index: 1000;
+        pointer-events: none;
+        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+    }
+
+    .timeline-tooltip .card {
+        margin: 0;
+        border: none;
+        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+    }
+
+    .timeline-tooltip .card-header {
+        padding: 8px 12px;
+        font-size: 14px;
+    }
+
+    .timeline-tooltip .card-body {
+        padding: 10px 12px;
+        background-color: #fff;
+        color: #212529;
+    }
+
+    .timeline-tooltip ul {
+        margin-top: 5px;
+        margin-bottom: 0;
+        padding-left: 20px;
+    }
+
+    .timeline-tooltip li {
+        margin-bottom: 3px;
+    }
+
+    /* This will hide the default vis timeline tooltips */
+    .vis-tooltip {
+        display: none !important;
+    }
+
+    /* Enhance milestone styling */
+    .vis-item.vis-point.milestone {
+        z-index: 110 !important;
+        cursor: pointer;
+    }
+
+    /* Custom styling for timeline project bars */
+    .vis-item.vis-range.project-item {
+        background-color: #0d6efd;
+        border-color: #0b5ed7;
+        color: white;
+        border-radius: 3px;
+        font-weight: 500;
+        cursor: pointer;
+    }
+
+    .vis-item.vis-range.project-item:hover {
+        background-color: #0a58ca;
+    }
+
+    /* Legend styles */
+    .badge.bg-purple {
+        background-color: #6f42c1 !important;
+        color: white !important;
+    }
+
+    /* Timer styles */
+    .timer-badge {
+        font-size: 0.8rem;
+    }
+
+    .timer-urgent {
+        background-color: #f44336 !important;
+    }
+
+    .timer-warning {
+        background-color: #ff9800 !important;
+    }
+
+    .timer-normal {
+        background-color: #4caf50 !important;
+    }
+    .body {
+        background-color: #f5f5f5;
+        color: #212529;
+    }
+
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>Tender Tracker</h1>
+        <div>
+            <a href="{% url 'projects:create' %}" class="btn btn-primary">
+                <i class="bi bi-plus-circle"></i> Add New Project
+            </a>
+        </div>
+    </div>
+
+    <!-- Status Tabs -->
+    <ul class="nav nav-tabs status-tabs mb-4">
+        <li class="nav-item">
+            <a href="?status=ALL" class="nav-link {% if current_status == 'ALL' %}active{% endif %}">
+                All Projects
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="?status=LIVE" class="nav-link {% if current_status == 'LIVE' %}active{% endif %}">
+                Live
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="?status=SUBMITTED" class="nav-link {% if current_status == 'SUBMITTED' %}active{% endif %}">
+                Submitted
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="?status=SUCCESSFUL" class="nav-link {% if current_status == 'SUCCESSFUL' %}active{% endif %}">
+                Successful
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="?status=UNSUCCESSFUL" class="nav-link {% if current_status == 'UNSUCCESSFUL' %}active{% endif %}">
+                Unsuccessful
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="?status=DECLINED" class="nav-link {% if current_status == 'DECLINED' %}active{% endif %}">
+                Declined
+            </a>
+        </li>
+        <li class="nav-item">
+            <a href="?status=ON_HOLD" class="nav-link {% if current_status == 'ON_HOLD' %}active{% endif %}">
+                On Hold
+            </a>
+        </li>
+    </ul>
+
+    <!-- Timeline (only shown for LIVE projects) -->
+    {% if current_status == 'LIVE' and gantt_data %}
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Project Timeline</h5>
+        </div>
+        <div class="card-body p-0">
+            <div class="timeline-container" id="timeline"></div>
+
+            <div class="d-flex justify-content-between p-3">
+                <div class="milestone-legend">
+                    <span class="badge rounded-pill bg-primary">Project Timeline</span>
+                    <span class="badge bg-warning text-dark">Win Room</span>
+                    <span class="badge bg-success">Site Visit</span>
+                    <span class="badge bg-purple">RFI Deadline</span>
+                    <span class="badge bg-danger">SC Deadline</span>
+                    <span class="badge bg-info">Mid Bid Review</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Search and filters -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3">
+                <div class="col-md-4">
+                    <div class="input-group">
+                        <input type="text" name="search" class="form-control" placeholder="Search projects..." value="{{ request.GET.search|default:'' }}">
+                        <input type="hidden" name="status" value="{{ current_status }}">
+                        <button class="btn btn-primary" type="submit">
+                            <i class="bi bi-search"></i> Search
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Projects Table -->
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Job #</th>
+                        <th>Project</th>
+                        <th>Client/Location</th>
+                        <th>Key Dates</th>
+                        <th>Deadline</th>
+                        <th>Tender</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for project in projects %}
+                    <tr>
+                        <td>{{ project.reference }}</td>
+                        <td>
+                            <div class="fw-semibold">{{ project.name }}</div>
+                            <div class="text-muted small">{{ project.estimator }}</div>
+                        </td>
+                        <td>
+                            <div>{{ project.client }}</div>
+                            <div class="text-muted small">{{ project.location }}</div>
+                            <div class="small">{{ project.contract_type }}</div>
+                        </td>
+                        <td>
+                            <div class="small">
+                                {% if project.start_date %}
+                                <div><span class="fw-semibold">Start:</span> {{ project.start_date|date:"d/m/Y" }}</div>
+                                {% endif %}
+                                {% if project.win_room_date %}
+                                <div><span class="fw-semibold">Win Room:</span> {{ project.win_room_date|date:"d/m/Y" }}</div>
+                                {% endif %}
+                                {% if project.site_visit_date %}
+                                <div><span class="fw-semibold">Site Visit:</span> {{ project.site_visit_date|date:"d/m/Y" }}</div>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td>
+                            {% if project.tender_deadline %}
+                            <div>{{ project.tender_deadline|date:"d/m/Y H:i" }}</div>
+                            <div>
+                                {% if project.is_live %}
+                                <span class="badge rounded-pill timer-badge
+                        {% if project.time_left == 'Expired' %}
+                          timer-urgent
+                        {% elif project.time_left|truncatechars:2|stringformat:'s' == '3' or project.time_left|truncatechars:2|stringformat:'s' == '2' or project.time_left|truncatechars:2|stringformat:'s' == '1' %}
+                          timer-urgent
+                        {% elif project.time_left|truncatechars:2|stringformat:'s' == '7' or project.time_left|truncatechars:2|stringformat:'s' == '6' or project.time_left|truncatechars:2|stringformat:'s' == '5' or project.time_left|truncatechars:2|stringformat:'s' == '4' %}
+                          timer-warning
+                        {% else %}
+                          timer-normal
+                        {% endif %}">
+                                    {{ project.time_left }}
+                                </span>
+                                {% endif %}
+                            </div>
+                            {% else %}
+                            <span class="text-muted">TBC</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if project.tender_bid_amount %}
+                            <div class="fw-semibold">£{{ project.tender_bid_amount|floatformat:2 }}</div>
+                            {% if project.margin_percentage %}
+                            <div class="small">{{ project.margin_percentage }}% margin</div>
+                            {% endif %}
+                            {% else %}
+                            <span class="text-muted">Not submitted</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="btn-group">
+                                <a href="{% url 'projects:detail' project.id %}" class="btn btn-sm btn-outline-primary">
+                                    <i class="bi bi-eye"></i> View
+                                </a>
+                                <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+                                    <span class="visually-hidden">Toggle Dropdown</span>
+                                </button>
+                                <ul class="dropdown-menu">
+                                    <li>
+                                        <a class="dropdown-item" href="{% url 'projects:update' project.id %}">
+                                            <i class="bi bi-pencil"></i> Edit
+                                        </a>
+                                    </li>
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center py-4">
+                            <div class="text-muted">No projects found.</div>
+                            <a href="{% url 'projects:create' %}" class="btn btn-primary mt-2">
+                                <i class="bi bi-plus-circle"></i> Add New Project
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://unpkg.com/vis-timeline@7.7.0/dist/vis-timeline-graph2d.min.js"></script>
+<script src="https://unpkg.com/vis-data@7.1.4/dist/vis-data.min.js"></script>
+<script>
+// Timeline implementation
+{% if current_status == 'LIVE' and gantt_data %}
+document.addEventListener('DOMContentLoaded', function() {
+    const ganttData = {{ gantt_data|safe }};
+    console.log("Timeline data:", ganttData);
+
+    if (ganttData.length > 0) {
+        // Create DataSet for items and groups
+        const items = new vis.DataSet();
+        const groups = new vis.DataSet();
+
+        // Helper function to convert DD/MM/YYYY date string to Date object
+        function parseBritishDate(dateStr) {
+            // Handle dates with or without time
+            if (dateStr.includes(' ')) {
+                // Format: DD/MM/YYYY HH:MM
+                const [datePart, timePart] = dateStr.split(' ');
+                const [day, month, year] = datePart.split('/');
+                const [hours, minutes] = timePart.split(':');
+
+                // Create date in local timezone without automatic adjustments
+                const date = new Date(Date.UTC(
+                    parseInt(year),
+                    parseInt(month) - 1,
+                    parseInt(day),
+                    parseInt(hours),
+                    parseInt(minutes)
+                ));
+
+                // Adjust for the timezone offset to keep the original time
+                const offset = date.getTimezoneOffset() * 60000;
+                return new Date(date.getTime() + offset);
+            } else {
+                // Format: DD/MM/YYYY (no time)
+                const [day, month, year] = dateStr.split('/');
+                // For dates without time, set to midnight local time
+                return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+            }
+        }
+
+        // Process project data
+        ganttData.forEach((project, index) => {
+            const groupId = `project-${project.id}`;
+
+            // Add group (row) for the project
+            groups.add({
+                id: groupId,
+                content: project.name,
+                className: 'project-group'
+            });
+
+            // Convert date strings to Date objects for the timeline
+            const startDate = parseBritishDate(project.start);
+            const endDate = parseBritishDate(project.end);
+
+            // Add project bar
+            items.add({
+                id: `task-${project.id}`,
+                group: groupId,
+                content: project.name,
+                start: startDate,
+                end: endDate,
+                className: 'project-item',
+                type: 'range',
+                // Store the raw project data for our custom tooltip
+                projectData: project
+            });
+
+            // Add milestones
+            if (project.milestones && project.milestones.length > 0) {
+                project.milestones.forEach((milestone, mIndex) => {
+                    const milestoneDate = parseBritishDate(milestone.date);
+
+                    items.add({
+                        id: `milestone-${project.id}-${mIndex}`,
+                        group: groupId,
+                        start: milestoneDate,
+                        className: `milestone ${milestone.type}`,
+                        type: 'point',
+                        // Important: Don't set title property to avoid default tooltip
+                        content: '',
+                        // Store the raw milestone data for our custom tooltip
+                        milestoneData: milestone
+                    });
+                });
+            }
+        });
+
+        // Configure timeline with tooltip disabled
+        const options = {
+            stack: false,
+            editable: false,
+            margin: {
+                item: 10,
+                axis: 5
+            },
+            showCurrentTime: true,
+            showMajorLabels: true,
+            showMinorLabels: true,
+            horizontalScroll: true,
+            zoomKey: 'ctrlKey',
+            orientation: 'top',
+            // Disable the built-in tooltips
+            tooltip: {
+                overrideItems: true
+            },
+            // NEW: Set autoResize true to allow height changes
+            autoResize: true,
+            // NEW: Set height to null to allow automatic height calculation
+            height: null
+        };
+
+        // Create timeline
+        const container = document.getElementById('timeline');
+        const timeline = new vis.Timeline(container, items, groups, options);
+
+        // NEW: Calculate and set dynamic height based on number of projects
+        function adjustTimelineHeight() {
+            // Base height calculation - minimum height plus additional height per project
+            const baseHeight = 100; // Base height for axes and controls
+            const rowHeight = 50; // Height per project row
+            const paddingHeight = 30; // Additional padding
+
+            // Calculate new height based on number of projects
+            const projectCount = ganttData.length;
+            let calculatedHeight = baseHeight + (projectCount * rowHeight) + paddingHeight;
+
+            // Set minimum height
+            calculatedHeight = Math.max(calculatedHeight, 400);
+
+            // Set the container height directly
+            container.style.height = calculatedHeight + 'px';
+
+            // Add expanded class if it's taller than standard
+            if (calculatedHeight > 400) {
+                container.classList.add('expanded');
+            } else {
+                container.classList.remove('expanded');
+            }
+
+            // Force timeline to redraw with new size
+            timeline.redraw();
+        }
+
+        // Adjust height initially
+        adjustTimelineHeight();
+
+        // Create a custom HTML tooltip
+        const tooltip = document.createElement('div');
+        tooltip.className = 'timeline-tooltip';
+        tooltip.style.display = 'none';
+        tooltip.style.position = 'absolute';
+        tooltip.style.zIndex = '1000';
+        document.body.appendChild(tooltip);
+
+        // Function to format date string with addition of one hour if it has a time component
+        function formatDateString(dateTimeStr) {
+            if (!dateTimeStr.includes(' ')) {
+                return dateTimeStr; // Return as is if no time component
+            }
+
+            try {
+                // Split into date and time parts
+                const [datePart, timePart] = dateTimeStr.split(' ');
+                const [hours, minutes] = timePart.split(':');
+
+                // Convert hours to number and add 1
+                let newHours = parseInt(hours) + 1;
+
+                // Handle midnight rollover (if it's 23:00, it becomes 00:00)
+                if (newHours >= 24) {
+                    newHours = 0;
+                }
+
+                // Format back with leading zero if needed
+                const formattedHours = newHours.toString().padStart(2, '0');
+
+                // Put it all back together
+                return `${datePart} ${formattedHours}:${minutes}`;
+            } catch (e) {
+                console.error("Error formatting time:", e);
+                return dateTimeStr; // Return original if there's an error
+            }
+        }
+
+        // Custom tooltip handling
+        timeline.on('itemover', function(properties) {
+            const item = items.get(properties.item);
+            if (!item) return;
+
+            let tooltipHTML = '';
+
+            // Check if it's a project bar or milestone
+            if (item.type === 'range' && item.projectData) {
+                // This is a project bar
+                const projectData = item.projectData;
+                const adjustedDeadlineStr = formatDateString(projectData.end);
+
+                tooltipHTML = `
+                    <div class="card">
+                        <div class="card-header bg-primary text-white">
+                            <strong>${projectData.name}</strong>
+                        </div>
+                        <div class="card-body">
+                            <div><strong>Deadline:</strong> ${adjustedDeadlineStr}</div>
+                        `;
+
+                // Add milestones if available
+                if (projectData.milestones && projectData.milestones.length > 0) {
+                    tooltipHTML += '<div class="mt-2"><strong>Key Dates:</strong></div><ul style="margin-bottom: 0; padding-left: 20px;">';
+
+                    projectData.milestones.forEach(milestone => {
+                        const adjustedMilestoneDate = formatDateString(milestone.date);
+                        tooltipHTML += `<li><strong>${milestone.name}:</strong> ${adjustedMilestoneDate}</li>`;
+                    });
+
+                    tooltipHTML += '</ul>';
+                }
+
+                tooltipHTML += '</div></div>';
+            } else if (item.milestoneData) {
+                // This is a milestone point
+                const milestone = item.milestoneData;
+                const adjustedMilestoneDate = formatDateString(milestone.date);
+
+                tooltipHTML = `
+                    <div class="card">
+                        <div class="card-header bg-secondary text-white">
+                            <strong>${milestone.name}</strong>
+                        </div>
+                        <div class="card-body">
+                            <div>${adjustedMilestoneDate}</div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Show tooltip with custom content
+            if (tooltipHTML) {
+                tooltip.innerHTML = tooltipHTML;
+                tooltip.style.display = 'block';
+                tooltip.style.left = (properties.event.pageX + 10) + 'px';
+                tooltip.style.top = (properties.event.pageY - 30) + 'px';
+            }
+        });
+
+        // Hide tooltip when not hovering over an item
+        timeline.on('itemout', function() {
+            tooltip.style.display = 'none';
+        });
+
+        // Move tooltip with mouse when hovering over an item
+        document.addEventListener('mousemove', function(event) {
+            if (tooltip.style.display === 'block') {
+                tooltip.style.left = (event.pageX + 10) + 'px';
+                tooltip.style.top = (event.pageY - 30) + 'px';
+            }
+        });
+
+        // Add responsive handling for window resize
+        window.addEventListener('resize', function() {
+            adjustTimelineHeight(); // Recalculate height on resize
+            timeline.redraw();
+        });
+    }
+});
+{% endif %}
+</script>
+{% endblock %}

@@ -1,0 +1,156 @@
+{% extends 'base.html' %}
+{% load crispy_forms_tags %}
+
+{% block title %}
+  {% if object %}
+    Edit Project - {{ object.name }}
+  {% else %}
+    Create New Project
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>
+      {% if object %}
+        Edit Project
+      {% else %}
+        Create New Project
+      {% endif %}
+    </h1>
+    <a href="{% if object %}{% url 'projects:detail' object.id %}{% else %}{% url 'projects:list' %}{% endif %}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-left"></i> Back
+    </a>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <form method="post">
+        {% csrf_token %}
+
+        <h5 class="mb-3">Basic Information</h5>
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.name|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.reference|as_crispy_field }}
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.location|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.status|as_crispy_field }}
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.estimator|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.project_manager|as_crispy_field }}
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.contract_type|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.pmqs|as_crispy_field }}
+          </div>
+        </div>
+
+        <h5 class="mt-4 mb-3">Key Dates</h5>
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.start_date|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.tender_deadline|as_crispy_field }}
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-4">
+            {{ form.win_room_date|as_crispy_field }}
+          </div>
+          <div class="col-md-4">
+            {{ form.site_visit_date|as_crispy_field }}
+          </div>
+          <div class="col-md-4">
+            {{ form.mid_bid_review_date|as_crispy_field }}
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.rfi_deadline|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.sc_deadline|as_crispy_field }}
+          </div>
+        </div>
+
+        <h5 class="mt-4 mb-3">SharePoint Documents</h5>
+        <div class="alert alert-info bg-primary">
+          <i class="bi bi-info-circle me-2"></i>
+          <strong>Note:</strong> The SharePoint link will be automatically included in tender invitations sent to subcontractors.
+        </div>
+
+        <div class="row">
+          <div class="col-md-8">
+            {{ form.sharepoint_folder_url|as_crispy_field }}
+          </div>
+          <div class="col-md-4">
+            {{ form.sharepoint_link_description|as_crispy_field }}
+          </div>
+        </div>
+
+        <h5 class="mt-4 mb-3">Tender Details</h5>
+
+        <div class="row">
+          <div class="col-md-6">
+            {{ form.tender_bid_amount|as_crispy_field }}
+          </div>
+          <div class="col-md-6">
+            {{ form.margin_percentage|as_crispy_field }}
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-12">
+            {{ form.description|as_crispy_field }}
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col-md-12">
+            {{ form.key_risks|as_crispy_field }}
+          </div>
+        </div>
+
+        <div class="d-flex justify-content-between mt-4">
+          <a href="{% if object %}{% url 'projects:detail' object.id %}{% else %}{% url 'projects:list' %}{% endif %}" class="btn btn-secondary">
+            <i class="bi bi-x"></i> Cancel
+          </a>
+          <button type="submit" class="btn btn-primary">
+            <i class="bi bi-save"></i>
+            {% if object %}
+              Save Changes
+            {% else %}
+              Create Project
+            {% endif %}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

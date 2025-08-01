@@ -1,0 +1,83 @@
+<!-- feedback/templates/feedback/results.html -->
+{% extends 'base.html' %}
+
+{% block title %}Feedback Analysis Results{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>Feedback Analysis Results</h1>
+    
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card mb-4">
+                <div class="card-header d-flex justify-content-between">
+                    <h5>Summary</h5>
+                    <div>
+                        <a href="{% url 'feedback:export' %}" class="btn btn-sm btn-primary">
+                            <i class="bi bi-download"></i> Export CSV
+                        </a>
+                        <a href="{% url 'feedback:download_report' 'text' %}" class="btn btn-sm btn-info">
+                            <i class="bi bi-file-text"></i> Download Report
+                        </a>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <div class="text-center">
+                                <h3 class="text-primary">{{ analysis.total_responses }}</h3>
+                                <p class="mb-0">Total Responses</p>
+                            </div>
+                        </div>
+                        {% if has_ratings %}
+                        <div class="col-md-3">
+                            <div class="text-center">
+                                <h3 class="text-success">{{ analysis.rating_analysis.average }}</h3>
+                                <p class="mb-0">Average Rating</p>
+                            </div>
+                        </div>
+                        {% endif %}
+                        {% if has_categories %}
+                        <div class="col-md-3">
+                            <div class="text-center">
+                                <h3 class="text-info">{{ analysis.category_analysis|length }}</h3>
+                                <p class="mb-0">Categories</p>
+                            </div>
+                        </div>
+                        {% endif %}
+                        {% if has_sentiment %}
+                        <div class="col-md-3">
+                            <div class="text-center">
+                                <h3 class="text-warning">{{ analysis.sentiment_analysis.positive }}%</h3>
+                                <p class="mb-0">Positive Sentiment</p>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    {% if text_report %}
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Detailed Report</h5>
+                </div>
+                <div class="card-body">
+                    <pre style="white-space: pre-wrap;">{{ text_report }}</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    
+    <div class="mt-3">
+        <a href="{% url 'feedback:dashboard' %}" class="btn btn-secondary">
+            <i class="bi bi-arrow-left"></i> Back to Dashboard
+        </a>
+    </div>
+</div>
+{% endblock %}

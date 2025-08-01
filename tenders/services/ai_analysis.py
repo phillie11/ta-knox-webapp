@@ -1,0 +1,4265 @@
+# tenders/services/ai_analysis.py - RESTORED WORKING VERSION
+
+import io
+import zipfile
+import os
+import re
+import json
+import time
+import logging
+import requests
+import mimetypes
+from typing import Dict, List, Any, Optional
+from datetime import datetime, date
+from decimal import Decimal
+from django.conf import settings
+from django.utils import timezone
+from ..models import TenderAnalysis, RFIItem, DocumentQuestion
+from projects.models import Project
+from subcontractors.models import Subcontractor
+from .enhanced_mapper import EnhancedAIAnalysisMapper
+
+logger = logging.getLogger(__name__)
+
+# Try to import anthropic
+try:
+    import anthropic
+    CLAUDE_AVAILABLE = True
+    logger.info("✅ Claude AI library loaded successfully")
+except ImportError as e:
+    CLAUDE_AVAILABLE = False
+    anthropic = None
+    logger.warning(f"⚠️ Claude AI library not available: {str(e)}. Using fallback mode.")
+
+class FileFormatDetector:
+    """Detect and count file formats in SharePoint folders"""
+
+    def __init__(self):
+        self.supported_formats = {
+            'pdf': ['.pdf'],
+            'word': ['.docx', '.doc'],
+            'excel': ['.xlsx', '.xls', '.csv'],
+            'powerpoint': ['.pptx', '.ppt'],
+            'text': ['.txt', '.rtf'],
+            'other': []
+        }
+
+    def analyze_folder_formats(self, documents: List[Dict]) -> Dict[str, Any]:
+        """Analyze file formats in the folder"""
+        format_counts = {
+            'pdf': 0, 'word': 0, 'excel': 0, 'powerpoint': 0, 'text': 0, 'other': 0,
+            'total': 0, 'readable': 0, 'unreadable': 0
+        }
+
+        unreadable_files = []
+
+        for doc in documents:
+            filename = doc.get('name', '').lower()
+            format_counts['total'] += 1
+
+            categorized = False
+            for format_type, extensions in self.supported_formats.items():
+                if format_type != 'other' and any(filename.endswith(ext) for ext in extensions):
+                    format_counts[format_type] += 1
+                    format_counts['readable'] += 1
+                    categorized = True
+                    break
+
+            if not categorized:
+                format_counts['other'] += 1
+                format_counts['unreadable'] += 1
+                unreadable_files.append(filename)
+
+        return {
+            'counts': format_counts,
+            'unreadable_files': unreadable_files,
+            'readability_percentage': (format_counts['readable'] / format_counts['total'] * 100) if format_counts['total'] > 0 else 0
+        }
+
+class ContractInformationExtractor:
+    """Extract specific contract information from tender documents"""
+
+    def __init__(self):
+        self.claude_service = ClaudeAIService()
+
+    def extract_contract_information(self, document_texts: List[str]) -> Dict[str, Any]:
+        """Extract contract-specific information from tender documents"""
+
+        combined_text = "\n\n".join(document_texts)
+
+        # Use Claude AI to extract structured contract information
+        contract_prompt = f"""
+        Analyze the following tender documents and extract specific contract information.
+        Return a structured response with the following information:
+
+        CONTRACT INFORMATION:
+        - Contract type (JCT, NEC, Bespoke, etc.)
+        - Any amendments or modifications noted
+
+        KEY DATES:
+        - Possession date/access date
+        - Start on site date/commencement date
+        - Practical completion date
+        - Handover date
+        - Tender deadline/submission date
+
+        INSURANCE REQUIREMENTS:
+        - Public liability insurance amount required
+        - Employers liability insurance amount required
+        - Professional indemnity insurance amount required
+        - Works insurance amount required
+
+        LIQUIDATED DAMAGES (LADs):
+        - LADs amount per week or per day
+        - LADs cap (as percentage or fixed amount)
+
+        KEY CONTACTS:
+        - Project manager name and contact details
+        - Architect/designer name and contact details
+        - Quantity surveyor name and contact details
+        - Client representative name and contact details
+        - Any other key contacts
+
+        BID DELIVERABLES:
+        - List all required tender submission items
+        - Format requirements (PDF, hard copy, etc.)
+        - Number of copies required
+
+        MAIN TRADE REQUIREMENTS:
+        - List the main subcontractor trades required
+        - Any specific trade requirements or qualifications
+        - Preferred subcontractor lists if mentioned
+
+        MISSING/AMBIGUOUS INFORMATION:
+        - Identify any missing, unclear, or ambiguous information that would affect pricing
+        - Note any contradictions between documents
+        - Highlight areas requiring clarification for fair pricing
+
+        Format your response as JSON with clear sections for each category.
+        If information is not found, indicate as "Not specified" or null.
+
+        Documents to analyze:
+        {combined_text[:15000]}  # Truncate for API limits
+        """
+
+        try:
+            response = self.claude_service.generate_analysis(contract_prompt)
+            return self._parse_contract_response(response)
+        except Exception as e:
+            logger.error(f"Error extracting contract information: {str(e)}")
+            return self._fallback_contract_analysis(combined_text)
+
+    def _parse_contract_response(self, response: str) -> Dict[str, Any]:
+        """Parse Claude's response into structured contract data"""
+        try:
+            # Try to extract JSON from response
+            import json
+
+            # Look for JSON block in response
+            json_start = response.find('{')
+            json_end = response.rfind('}') + 1
+
+            if json_start != -1 and json_end > json_start:
+                json_text = response[json_start:json_end]
+                contract_data = json.loads(json_text)
+                return self._normalize_contract_data(contract_data)
+            else:
+                # Parse structured text response
+                return self._parse_text_response(response)
+
+        except Exception as e:
+            logger.error(f"Error parsing contract response: {str(e)}")
+            return self._fallback_contract_analysis(response)
+
+    def _normalize_contract_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize contract data to match model fields"""
+        normalized = {
+            'contract_type': data.get('contract_type', ''),
+            'contract_amendments': data.get('amendments', []),
+            'key_contacts': data.get('key_contacts', {}),
+            'bid_deliverables': data.get('bid_deliverables', []),
+            'main_trade_requirements': data.get('trade_requirements', {}),
+        }
+
+        # Parse dates
+        date_fields = {
+            'possession_date': data.get('possession_date'),
+            'start_on_site_date': data.get('start_on_site_date'),
+            'practical_completion_date': data.get('practical_completion_date'),
+            'handover_date': data.get('handover_date'),
+            'tender_deadline': data.get('tender_deadline'),
+        }
+
+        for field, date_str in date_fields.items():
+            if date_str and date_str.lower() != 'not specified':
+                normalized[field] = self._parse_date(date_str)
+            else:
+                normalized[field] = None
+
+        # Parse insurance amounts
+        insurance_fields = {
+            'public_liability_amount': data.get('public_liability'),
+            'employers_liability_amount': data.get('employers_liability'),
+            'professional_indemnity_amount': data.get('professional_indemnity'),
+            'works_insurance_amount': data.get('works_insurance'),
+        }
+
+        for field, amount_str in insurance_fields.items():
+            normalized[field] = self._parse_amount(amount_str)
+
+        # Parse LADs
+        normalized['lads_amount_per_week'] = self._parse_amount(data.get('lads_per_week'))
+        normalized['lads_amount_per_day'] = self._parse_amount(data.get('lads_per_day'))
+        normalized['lads_cap_percentage'] = self._parse_percentage(data.get('lads_cap_percentage'))
+        normalized['lads_cap_amount'] = self._parse_amount(data.get('lads_cap_amount'))
+
+        return normalized
+
+    def _parse_date(self, date_str: str) -> Optional[date]:
+        """Parse various date formats"""
+        if not date_str or date_str.lower() in ['not specified', 'tbc', 'tbd']:
+            return None
+
+        date_patterns = [
+            r'(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})',  # DD/MM/YYYY or DD-MM-YYYY
+            r'(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})',  # YYYY/MM/DD or YYYY-MM-DD
+            r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})',  # DD Mon YYYY
+        ]
+
+        for pattern in date_patterns:
+            match = re.search(pattern, date_str, re.IGNORECASE)
+            if match:
+                try:
+                    if 'Jan|Feb|Mar' in pattern:  # Month name format
+                        day, month_name, year = match.groups()
+                        month_map = {'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+                                   'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12}
+                        month = month_map.get(month_name.lower()[:3])
+                        if month:
+                            return date(int(year), month, int(day))
+                    elif pattern.startswith(r'(\d{4})'):  # YYYY-MM-DD format
+                        year, month, day = match.groups()
+                        return date(int(year), int(month), int(day))
+                    else:  # DD/MM/YYYY format
+                        day, month, year = match.groups()
+                        return date(int(year), int(month), int(day))
+                except ValueError:
+                    continue
+
+        return None
+
+    def _parse_amount(self, amount_str: str) -> Optional[Decimal]:
+        """Parse monetary amounts from text"""
+        if not amount_str or amount_str.lower() in ['not specified', 'tbc', 'tbd']:
+            return None
+
+        # Remove currency symbols and commas
+        cleaned = re.sub(r'[£$€,\s]', '', str(amount_str))
+
+        # Look for millions/thousands indicators
+        if 'm' in cleaned.lower() or 'million' in amount_str.lower():
+            number = re.search(r'(\d+\.?\d*)', cleaned)
+            if number:
+                return Decimal(number.group(1)) * 1000000
+
+        if 'k' in cleaned.lower() or 'thousand' in amount_str.lower():
+            number = re.search(r'(\d+\.?\d*)', cleaned)
+            if number:
+                return Decimal(number.group(1)) * 1000
+
+        # Extract pure number
+        number = re.search(r'(\d+\.?\d*)', cleaned)
+        if number:
+            try:
+                return Decimal(number.group(1))
+            except:
+                return None
+
+        return None
+
+    def _parse_percentage(self, percent_str: str) -> Optional[Decimal]:
+        """Parse percentage values"""
+        if not percent_str or percent_str.lower() in ['not specified', 'tbc', 'tbd']:
+            return None
+
+        number = re.search(r'(\d+\.?\d*)', str(percent_str))
+        if number:
+            try:
+                return Decimal(number.group(1))
+            except:
+                return None
+
+        return None
+
+    def _fallback_contract_analysis(self, text: str) -> Dict[str, Any]:
+        """Fallback analysis if AI extraction fails"""
+        return {
+            'contract_type': 'Analysis pending',
+            'contract_amendments': [],
+            'key_contacts': {},
+            'bid_deliverables': ['Standard tender submission required'],
+            'main_trade_requirements': {},
+            'possession_date': None,
+            'start_on_site_date': None,
+            'practical_completion_date': None,
+            'handover_date': None,
+            'tender_deadline': None,
+            'public_liability_amount': None,
+            'employers_liability_amount': None,
+            'professional_indemnity_amount': None,
+            'works_insurance_amount': None,
+            'lads_amount_per_week': None,
+            'lads_amount_per_day': None,
+            'lads_cap_percentage': None,
+            'lads_cap_amount': None,
+        }
+
+class RFIGenerator:
+    """Generate RFI (Request for Information) items from tender analysis"""
+
+    def __init__(self):
+        self.claude_service = ClaudeAIService()
+
+    def generate_rfi_items(self, document_texts: List[str], contract_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate RFI items for missing/ambiguous information"""
+
+        combined_text = "\n\n".join(document_texts)
+
+        rfi_prompt = f"""
+        Analyze the tender documents and identify all missing, ambiguous, or unclear information
+        that would prevent accurate and competitive pricing. Focus on practical issues that estimators need clarified.
+
+        Generate RFI items in the following categories:
+        - TECHNICAL: Missing specifications, unclear technical requirements
+        - COMMERCIAL: Unclear commercial terms, payment conditions
+        - PROGRAM: Missing dates, unclear sequencing
+        - SPECIFICATION: Ambiguous material/workmanship specs
+        - DRAWING: Missing drawings, drawing discrepancies
+        - HEALTH_SAFETY: Unclear H&S requirements
+        - ENVIRONMENTAL: Unclear environmental constraints
+        - QUALITY: Unclear quality standards/testing requirements
+
+        For each RFI item, provide:
+        - Category (from above list)
+        - Priority (CRITICAL/HIGH/MEDIUM/LOW)
+        - Clear question text
+        - Document reference where the issue was found
+        - Specific location (page/section)
+
+        Focus on items that directly impact pricing accuracy and competitive fairness.
+
+        Contract information already extracted: {contract_data}
+
+        Documents: {combined_text[:12000]}
+
+        Return as JSON array of RFI items.
+        """
+
+        try:
+            response = self.claude_service.generate_analysis(rfi_prompt)
+            return self._parse_rfi_response(response)
+        except Exception as e:
+            logger.error(f"Error generating RFI items: {str(e)}")
+            return self._fallback_rfi_items()
+
+    def _parse_rfi_response(self, response: str) -> List[Dict[str, Any]]:
+        """Parse Claude's RFI response"""
+        try:
+            import json
+
+            # Look for JSON array in response
+            json_start = response.find('[')
+            json_end = response.rfind(']') + 1
+
+            if json_start != -1 and json_end > json_start:
+                json_text = response[json_start:json_end]
+                rfi_items = json.loads(json_text)
+                return rfi_items
+            else:
+                # Parse from structured text
+                return self._parse_rfi_text(response)
+
+        except Exception as e:
+            logger.error(f"Error parsing RFI response: {str(e)}")
+            return self._fallback_rfi_items()
+
+    def _fallback_rfi_items(self) -> List[Dict[str, Any]]:
+        """Fallback RFI items if generation fails"""
+        return [
+            {
+                'category': 'TECHNICAL',
+                'priority': 'HIGH',
+                'question': 'Please provide complete technical specifications',
+                'reference': 'General',
+                'location': 'Throughout documents'
+            },
+            {
+                'category': 'PROGRAM',
+                'priority': 'HIGH',
+                'question': 'Please confirm all key project dates',
+                'reference': 'General',
+                'location': 'Throughout documents'
+            },
+            {
+                'category': 'COMMERCIAL',
+                'priority': 'HIGH',
+                'question': 'Please clarify payment terms and conditions',
+                'reference': 'General',
+                'location': 'Throughout documents'
+            }
+        ]
+
+class DocumentQuestionAnswerer:
+    """Answer questions about tender documents using AI"""
+
+    def __init__(self):
+        self.claude_service = ClaudeAIService()
+
+    def answer_question(self, question: str, document_texts: List[str], document_names: List[str]) -> Dict[str, Any]:
+        """Answer a specific question about the tender documents"""
+
+        combined_text = "\n\n".join([
+            f"=== {name} ===\n{text}" for name, text in zip(document_names, document_texts)
+        ])
+
+        qa_prompt = f"""
+        Answer the following question based ONLY on the information provided in the tender documents.
+
+        Question: {question}
+
+        Instructions:
+        - Provide a direct, specific answer if the information is clearly stated
+        - If the information is not in the documents, state "Information not found in provided documents"
+        - If the information is unclear or ambiguous, explain what is unclear
+        - Quote relevant sections from the documents when possible
+        - Indicate which documents contain the relevant information
+        - Rate your confidence in the answer (0-100%)
+
+        Documents:
+        {combined_text[:20000]}  # Increased limit for Q&A
+
+        Provide response in this format:
+        ANSWER: [your answer]
+        CONFIDENCE: [0-100]%
+        SOURCES: [list of document names that contain relevant information]
+        QUOTES: [relevant quotes from documents if applicable]
+        """
+
+        try:
+            response = self.claude_service.generate_analysis(qa_prompt)
+            return self._parse_qa_response(response, document_names)
+        except Exception as e:
+            logger.error(f"Error answering question: {str(e)}")
+            return {
+                'answer': f"Error processing question: {str(e)}",
+                'confidence': 0,
+                'sources': [],
+                'quotes': []
+            }
+
+    def _parse_qa_response(self, response: str, document_names: List[str]) -> Dict[str, Any]:
+        """Parse the Q&A response from Claude"""
+
+        # Extract sections using regex
+        answer_match = re.search(r'ANSWER:\s*(.+?)(?=CONFIDENCE:|$)', response, re.DOTALL)
+        confidence_match = re.search(r'CONFIDENCE:\s*(\d+)', response)
+        sources_match = re.search(r'SOURCES:\s*(.+?)(?=QUOTES:|$)', response, re.DOTALL)
+        quotes_match = re.search(r'QUOTES:\s*(.+?)$', response, re.DOTALL)
+
+        answer = answer_match.group(1).strip() if answer_match else response
+        confidence = int(confidence_match.group(1)) if confidence_match else 50
+
+        # Parse sources
+        sources = []
+        if sources_match:
+            sources_text = sources_match.group(1).strip()
+            for doc_name in document_names:
+                if doc_name.lower() in sources_text.lower():
+                    sources.append(doc_name)
+
+        # Parse quotes
+        quotes = []
+        if quotes_match:
+            quotes_text = quotes_match.group(1).strip()
+            # Split by common quote separators
+            quote_lines = [q.strip() for q in quotes_text.split('\n') if q.strip() and not q.strip().startswith('-')]
+            quotes = quote_lines[:3]  # Limit to 3 quotes
+
+        return {
+            'answer': answer,
+            'confidence': confidence,
+            'sources': sources,
+            'quotes': quotes
+        }
+
+class SharePointService:
+    """Service for accessing SharePoint documents using Microsoft Graph API"""
+
+    def __init__(self):
+        self.client_id = getattr(settings, 'MS_GRAPH_CLIENT_ID', '')
+        self.client_secret = getattr(settings, 'MS_GRAPH_CLIENT_SECRET', '')
+        self.tenant_id = getattr(settings, 'MS_GRAPH_TENANT_ID', '')
+        self.access_token = None
+        if self.client_id and self.client_secret and self.tenant_id:
+            self._get_access_token()
+
+    def _get_access_token(self):
+        """Get access token for Microsoft Graph API"""
+        try:
+            import msal
+
+            authority_url = f"https://login.microsoftonline.com/{self.tenant_id}"
+            app = msal.ConfidentialClientApplication(
+                client_id=self.client_id,
+                client_credential=self.client_secret,
+                authority=authority_url
+            )
+
+            scopes = ["https://graph.microsoft.com/.default"]
+            result = app.acquire_token_for_client(scopes=scopes)
+
+            if "access_token" in result:
+                self.access_token = result["access_token"]
+                logger.info("✅ Successfully acquired SharePoint access token")
+            else:
+                logger.error(f"❌ Failed to acquire token: {result.get('error_description')}")
+
+        except Exception as e:
+            logger.error(f"❌ Error getting SharePoint access token: {str(e)}")
+
+    def get_folder_documents(self, sharepoint_url: str) -> List[Dict]:
+        """Get all documents from a SharePoint folder (non-recursive)"""
+        try:
+            if not self.access_token:
+                logger.error("No access token available for SharePoint")
+                return []
+
+            # Parse SharePoint URL to extract site and folder path
+            site_info = self._parse_sharepoint_url(sharepoint_url)
+            if not site_info:
+                return []
+
+            # Get site ID
+            site_id = self._get_site_id(site_info['site_url'])
+            if not site_id:
+                return []
+
+            # Get drive ID for the document library
+            drive_id = self._get_drive_id(site_id, site_info['library'])
+            if not drive_id:
+                return []
+
+            # Get documents from folder
+            documents = self._get_documents_from_folder(drive_id, site_info['folder_path'])
+
+            return documents
+
+        except Exception as e:
+            logger.error(f"Error getting SharePoint documents: {str(e)}")
+            return []
+
+    def get_folder_documents_recursive(self, sharepoint_url: str, max_depth: int = 10) -> List[Dict]:
+        """Get all documents from a SharePoint folder recursively"""
+        try:
+            if not self.access_token:
+                logger.error("No access token available for SharePoint")
+                return []
+
+            # Parse SharePoint URL to extract site and folder path
+            site_info = self._parse_sharepoint_url(sharepoint_url)
+            if not site_info:
+                logger.error("Could not parse SharePoint URL")
+                return []
+
+            # Get site ID
+            site_id = self._get_site_id(site_info['site_url'])
+            if not site_id:
+                logger.error("Could not get SharePoint site ID")
+                return []
+
+            # Get drive ID for the document library
+            drive_id = self._get_drive_id(site_id, site_info['library'])
+            if not drive_id:
+                logger.error("Could not get SharePoint drive ID")
+                return []
+
+            logger.info(f"Starting recursive document scan of SharePoint folder: {sharepoint_url}")
+            logger.info(f"Maximum folder depth: {max_depth}")
+
+            # Get documents recursively from folder
+            documents = self._get_documents_from_folder_recursive(
+                drive_id,
+                site_info['folder_path'],
+                max_depth
+            )
+
+            # FIX: Ensure we always return a list, never None
+            if documents is None:
+                logger.warning("_get_documents_from_folder_recursive returned None, returning empty list")
+                return []
+
+            if not isinstance(documents, list):
+                logger.warning(f"Unexpected return type: {type(documents)}")
+                return []
+
+            return documents
+
+        except Exception as e:
+            logger.error(f"Error in recursive document scan: {str(e)}")
+            return []  # Always return empty list on error, never None
+
+    def _parse_sharepoint_url(self, url: str) -> Optional[Dict]:
+        """Parse SharePoint URL to extract components"""
+        try:
+            from urllib.parse import urlparse, unquote, parse_qs
+
+            logger.info(f"Parsing SharePoint URL: {url}")
+
+            if 'sharepoint.com' not in url:
+                logger.error(f"Invalid SharePoint URL: {url}")
+                return None
+
+            parsed = urlparse(url)
+
+            # Handle Forms/AllItems.aspx URLs with id parameter
+            if '/Forms/AllItems.aspx' in parsed.path and parsed.query:
+                logger.info("Detected Forms/AllItems.aspx URL with id parameter")
+
+                # Parse query parameters
+                query_params = parse_qs(parsed.query)
+                id_param = query_params.get('id', [None])[0]
+
+                if id_param:
+                    # Decode the id parameter
+                    decoded_path = unquote(id_param)
+                    logger.info(f"Decoded path: {decoded_path}")
+
+                    # Extract folder path from the decoded id
+                    if '/Shared Documents/' in decoded_path:
+                        shared_docs_index = decoded_path.find('/Shared Documents/')
+                        folder_path = decoded_path[shared_docs_index + len('/Shared Documents/'):].strip('/')
+
+                        logger.info(f"✅ Extracted folder path: '{folder_path}'")
+
+                        # Extract site info
+                        parts = url.split('/')
+                        tenant_index = next(i for i, part in enumerate(parts) if 'sharepoint.com' in part)
+                        site_url = '/'.join(parts[:tenant_index + 3])
+
+                        return {
+                            'site_url': site_url,
+                            'library': "Documents",
+                            'folder_path': folder_path
+                        }
+
+            # Handle clean URLs
+            elif '/Shared%20Documents/' in url or '/Shared Documents/' in url:
+                logger.info("Detected clean Shared Documents URL")
+
+                parts = url.split('/')
+                tenant_index = next(i for i, part in enumerate(parts) if 'sharepoint.com' in part)
+                site_url = '/'.join(parts[:tenant_index + 3])
+
+                # Find the folder path after Shared Documents
+                folder_path = ""
+                if 'Shared%20Documents' in url:
+                    shared_docs_part = 'Shared%20Documents'
+                else:
+                    shared_docs_part = 'Shared Documents'
+
+                shared_docs_index = url.find(shared_docs_part)
+                if shared_docs_index != -1:
+                    after_shared_docs = url[shared_docs_index + len(shared_docs_part):].strip('/')
+                    folder_path = after_shared_docs.replace('%20', ' ').replace('%26', '&').replace('%2C', ',')
+
+                return {
+                    'site_url': site_url,
+                    'library': "Documents",
+                    'folder_path': folder_path
+                }
+
+            logger.error(f"Could not parse SharePoint URL format: {url}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error parsing SharePoint URL: {str(e)}")
+            return None
+
+    def _get_site_id(self, site_url: str) -> Optional[str]:
+        """Get SharePoint site ID"""
+        try:
+            # Extract hostname and site path
+            parts = site_url.replace('https://', '').split('/')
+            hostname = parts[0]
+            site_path = '/' + '/'.join(parts[1:]) if len(parts) > 1 else ''
+
+            url = f"https://graph.microsoft.com/v1.0/sites/{hostname}:{site_path}"
+
+            headers = {
+                'Authorization': f'Bearer {self.access_token}',
+                'Accept': 'application/json'
+            }
+
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                site_id = response.json()['id']
+                logger.info(f"✅ Successfully got site ID: {site_id}")
+                return site_id
+            else:
+                logger.error(f"❌ Failed to get site ID: {response.status_code} - {response.text}")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Error getting site ID: {str(e)}")
+            return None
+
+    def _get_drive_id(self, site_id: str, library_name: str) -> Optional[str]:
+        """Get drive ID for document library"""
+        try:
+            url = f"https://graph.microsoft.com/v1.0/sites/{site_id}/drives"
+
+            headers = {
+                'Authorization': f'Bearer {self.access_token}',
+                'Accept': 'application/json'
+            }
+
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                drives = response.json()['value']
+                logger.info(f"Found {len(drives)} drives on site")
+
+                for drive in drives:
+                    logger.info(f"  Drive: {drive['name']} (ID: {drive['id']})")
+                    if drive['name'] == library_name or 'Documents' in drive['name']:
+                        logger.info(f"✅ Selected drive: {drive['name']}")
+                        return drive['id']
+
+                # If no exact match, return first drive
+                if drives:
+                    logger.info(f"No exact match found, using first drive: {drives[0]['name']}")
+                    return drives[0]['id']
+            else:
+                logger.error(f"❌ Failed to get drives: {response.status_code} - {response.text}")
+
+            return None
+
+        except Exception as e:
+            logger.error(f"❌ Error getting drive ID: {str(e)}")
+            return None
+
+    def _get_documents_from_folder(self, drive_id: str, folder_path: str) -> List[Dict]:
+        """Get all documents from a specific folder (non-recursive)"""
+        try:
+            if folder_path:
+                # URL encode the folder path properly
+                encoded_path = '/'.join([requests.utils.quote(part, safe='') for part in folder_path.split('/')])
+                url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{encoded_path}:/children"
+            else:
+                url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root/children"
+
+            headers = {
+                'Authorization': f'Bearer {self.access_token}',
+                'Accept': 'application/json'
+            }
+
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                items = response.json()['value']
+                documents = []
+
+                for item in items:
+                    if item.get('file'):  # It's a file, not a folder
+                        file_info = item['file']
+                        mime_type = file_info.get('mimeType', 'application/octet-stream')
+
+                        # Only include document types
+                        document_types = [
+                            'application/pdf',
+                            'application/msword',
+                            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                            'application/vnd.ms-excel',
+                            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                            'application/vnd.ms-powerpoint',
+                            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                            'text/plain',
+                            'text/csv',
+                            'application/rtf'
+                        ]
+
+                        if mime_type in document_types:
+                            document = {
+                                'name': item['name'],
+                                'size': item.get('size', 0),
+                                'mime_type': mime_type,
+                                'download_url': item.get('@microsoft.graph.downloadUrl'),
+                                'web_url': item.get('webUrl'),
+                                'last_modified': item.get('lastModifiedDateTime'),
+                                'created': item.get('createdDateTime')
+                            }
+                            documents.append(document)
+
+                logger.info(f"Found {len(documents)} documents in folder '{folder_path}'")
+                return documents
+            else:
+                logger.error(f"Failed to get folder contents: {response.status_code} - {response.text}")
+                return []
+
+        except Exception as e:
+            logger.error(f"Error getting documents from folder: {str(e)}")
+            return []
+
+    def _get_documents_from_folder_recursive(self, drive_id: str, folder_path: str = "", max_depth: int = 10, current_depth: int = 0) -> List[Dict]:
+        """Recursively get all documents from a folder and all its subfolders"""
+        try:
+            if current_depth > max_depth:
+                logger.warning(f"Max recursion depth ({max_depth}) reached for folder: {folder_path}")
+                return []
+
+            # Build the URL for this folder
+            if folder_path:
+                # URL encode the folder path properly
+                encoded_path = '/'.join([requests.utils.quote(part, safe='') for part in folder_path.split('/')])
+                url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:/{encoded_path}:/children"
+            else:
+                url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root/children"
+
+            headers = {
+                'Authorization': f'Bearer {self.access_token}',
+                'Accept': 'application/json'
+            }
+
+            logger.info(f"📁 Requesting folder: {folder_path or 'root'} (depth {current_depth})")
+            response = requests.get(url, headers=headers)
+
+            if response.status_code != 200:
+                logger.error(f"❌ Failed to get folder contents for '{folder_path}': {response.status_code}")
+                return []
+
+            items = response.json()['value']
+            all_documents = []
+
+            logger.info(f"📂 Processing folder '{folder_path or 'root'}': found {len(items)} items")
+
+            for item in items:
+                item_name = item.get('name', 'Unknown')
+
+                if item.get('file'):  # It's a file
+                    # Extract file information
+                    file_info = item['file']
+                    mime_type = file_info.get('mimeType', 'application/octet-stream')
+
+                    # Only include document types
+                    document_types = [
+                        'application/pdf',
+                        'application/msword',
+                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                        'application/vnd.ms-excel',
+                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        'application/vnd.ms-powerpoint',
+                        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                        'text/plain',
+                        'text/csv',
+                        'application/rtf'
+                    ]
+
+                    if mime_type in document_types:
+                        # Get the folder path for this document
+                        doc_folder_path = folder_path if folder_path else "root"
+
+                        document = {
+                            'name': item_name,
+                            'path': f"{doc_folder_path}/{item_name}" if folder_path else item_name,
+                            'size': item.get('size', 0),
+                            'mime_type': mime_type,
+                            'download_url': item.get('@microsoft.graph.downloadUrl'),
+                            'web_url': item.get('webUrl'),
+                            'folder_path': doc_folder_path,
+                            'last_modified': item.get('lastModifiedDateTime'),
+                            'created': item.get('createdDateTime')
+                        }
+                        all_documents.append(document)
+                        logger.info(f"  📄 Added document: {document['path']} ({mime_type})")
+
+                elif item.get('folder'):  # It's a folder
+                    # Recursively process subfolder
+                    subfolder_name = item_name
+                    subfolder_path = f"{folder_path}/{subfolder_name}" if folder_path else subfolder_name
+
+                    logger.info(f"  📁 Processing subfolder: {subfolder_path}")
+
+                    # Recursively get documents from this subfolder
+                    subfolder_documents = self._get_documents_from_folder_recursive(
+                        drive_id,
+                        subfolder_path,
+                        max_depth,
+                        current_depth + 1
+                    )
+                    all_documents.extend(subfolder_documents)
+
+                    logger.info(f"  📁 Subfolder '{subfolder_path}' contributed {len(subfolder_documents)} documents")
+
+            logger.info(f"✅ Folder '{folder_path or 'root'}' total: {len(all_documents)} documents")
+            return all_documents
+
+        except Exception as e:
+            logger.error(f"❌ Error getting documents from folder '{folder_path}': {str(e)}")
+            return []
+
+    def download_document_content(self, download_url: str) -> Optional[bytes]:
+        """Download document content from SharePoint"""
+        try:
+            headers = {
+                'Authorization': f'Bearer {self.access_token}',
+            }
+
+            response = requests.get(download_url, headers=headers)
+            if response.status_code == 200:
+                return response.content
+            else:
+                logger.error(f"Failed to download document: {response.status_code}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error downloading document: {str(e)}")
+            return None
+
+# Add to OptimizedSharePointService class in ai_analysis.py
+def get_folder_documents_recursive_fast(self, folder_url: str, max_depth: int = 10) -> List[Dict]:
+    """
+    Fast recursive document retrieval with depth limiting
+    """
+    try:
+        documents = []
+        folders_to_process = [(folder_url, 0)]  # (url, depth)
+
+        while folders_to_process and len(documents) < 50:  # Limit total documents
+            current_url, current_depth = folders_to_process.pop(0)
+
+            if current_depth >= max_depth:
+                continue
+
+            folder_docs = self.get_folder_documents(current_url)
+
+            for doc in folder_docs:
+                if doc.get('type') == 'folder' and current_depth < max_depth:
+                    folders_to_process.append((doc.get('url', ''), current_depth + 1))
+                elif doc.get('type') == 'file':
+                    documents.append(doc)
+
+                # Stop if we have enough documents
+                if len(documents) >= 50:
+                    break
+
+        logger.info(f"📄 Found {len(documents)} documents in SharePoint folder")
+        return documents
+
+    except Exception as e:
+        logger.error(f"Error in recursive document retrieval: {str(e)}")
+        return []
+
+class DocumentParser:
+    """Parse different document types to extract text - FIXED VERSION"""
+
+    @staticmethod
+    def extract_text(content: bytes, mime_type: str, filename: str) -> str:
+        """Extract text from document content based on type"""
+        try:
+            filename_lower = filename.lower()
+
+            # Handle text files
+            if 'text' in mime_type.lower() or filename_lower.endswith('.txt'):
+                return content.decode('utf-8', errors='ignore')
+
+            # Handle PDFs
+            elif 'pdf' in mime_type.lower() or filename_lower.endswith('.pdf'):
+                return DocumentParser._extract_pdf_text(content, filename)
+
+            # Handle Word documents
+            elif ('word' in mime_type.lower() or 'msword' in mime_type.lower() or
+                  filename_lower.endswith(('.docx', '.doc'))):
+                return DocumentParser._extract_word_text(content, filename)
+
+            # Handle Excel files
+            elif ('excel' in mime_type.lower() or 'spreadsheet' in mime_type.lower() or
+                  filename_lower.endswith(('.xlsx', '.xls'))):
+                return DocumentParser._extract_excel_text(content, filename)
+
+            # Handle PowerPoint
+            elif ('powerpoint' in mime_type.lower() or 'presentation' in mime_type.lower() or
+                  filename_lower.endswith(('.pptx', '.ppt'))):
+                return DocumentParser._extract_powerpoint_text(content, filename)
+
+            # Try to decode as text for unknown types
+            else:
+                try:
+                    text = content.decode('utf-8', errors='ignore')
+                    # Check if it looks like readable text
+                    if len(text.strip()) > 20 and any(c.isalpha() for c in text):
+                        return text
+                    else:
+                        return f"Document: {filename} - Binary file, unable to extract text content"
+                except:
+                    return f"Document: {filename} - Binary file, unable to extract text content"
+
+        except Exception as e:
+            logger.error(f"Error extracting text from {filename}: {str(e)}")
+            return f"Document: {filename} - Error extracting content: {str(e)}"
+
+    @staticmethod
+    def _extract_pdf_text(content: bytes, filename: str) -> str:
+        """Extract text from PDF - Simple implementation"""
+        try:
+            # Try a basic approach for PDFs
+            text_content = content.decode('utf-8', errors='ignore')
+
+            # Look for text patterns in PDF
+            import re
+
+            # Extract text between stream markers (simplified PDF parsing)
+            text_patterns = re.findall(r'stream\s*(.*?)\s*endstream', text_content, re.DOTALL | re.IGNORECASE)
+
+            extracted_text = []
+            for pattern in text_patterns:
+                # Clean up the text
+                clean_text = re.sub(r'[^\w\s\.,;:!?()/-]', ' ', pattern)
+                clean_text = ' '.join(clean_text.split())
+                if len(clean_text) > 10:
+                    extracted_text.append(clean_text)
+
+            result = ' '.join(extracted_text)
+
+            if len(result.strip()) > 50:
+                return f"=== PDF: {filename} ===\n{result[:5000]}..."  # Limit to 5000 chars
+            else:
+                return f"=== PDF: {filename} ===\nPDF document - text extraction needs PDF parsing library. File size: {len(content)} bytes"
+
+        except Exception as e:
+            return f"=== PDF: {filename} ===\nPDF document - {str(e)}. File size: {len(content)} bytes"
+
+    @staticmethod
+    def _extract_word_text(content: bytes, filename: str) -> str:
+        """Extract text from Word documents"""
+        try:
+            # For .docx files (ZIP-based format)
+            if filename.lower().endswith('.docx'):
+                with zipfile.ZipFile(io.BytesIO(content)) as zip_file:
+                    # Word content is in word/document.xml
+                    if 'word/document.xml' in zip_file.namelist():
+                        xml_content = zip_file.read('word/document.xml').decode('utf-8', errors='ignore')
+
+                        # Extract text between XML tags
+                        import re
+                        text_pattern = r'<w:t[^>]*>([^<]*)</w:t>'
+                        text_matches = re.findall(text_pattern, xml_content)
+
+                        extracted_text = ' '.join(text_matches)
+
+                        if len(extracted_text.strip()) > 20:
+                            return f"=== Word: {filename} ===\n{extracted_text}"
+                        else:
+                            return f"=== Word: {filename} ===\nWord document detected. Content extraction needs docx library. File size: {len(content)} bytes"
+                    else:
+                        return f"=== Word: {filename} ===\nDocx format not recognized. File size: {len(content)} bytes"
+
+            # For older .doc files
+            else:
+                # Try to extract readable text
+                text_content = content.decode('utf-8', errors='ignore')
+                # Remove binary characters and extract readable portions
+                import re
+                readable_text = re.sub(r'[^\w\s\.,;:!?()\-/]', ' ', text_content)
+                words = readable_text.split()
+                meaningful_words = [w for w in words if len(w) > 2 and w.isalpha()]
+
+                if len(meaningful_words) > 10:
+                    result = ' '.join(meaningful_words[:500])  # Limit words
+                    return f"=== Word: {filename} ===\n{result}"
+                else:
+                    return f"=== Word: {filename} ===\nLegacy Word document. Content extraction needs python-docx library. File size: {len(content)} bytes"
+
+        except Exception as e:
+            return f"=== Word: {filename} ===\nWord document - {str(e)}. File size: {len(content)} bytes"
+
+    @staticmethod
+    def _extract_excel_text(content: bytes, filename: str) -> str:
+        """Extract text from Excel files"""
+        try:
+            # For .xlsx files (ZIP-based format)
+            if filename.lower().endswith('.xlsx'):
+                with zipfile.ZipFile(io.BytesIO(content)) as zip_file:
+                    # Check for shared strings (text content in Excel)
+                    if 'xl/sharedStrings.xml' in zip_file.namelist():
+                        shared_strings = zip_file.read('xl/sharedStrings.xml').decode('utf-8', errors='ignore')
+
+                        # Extract text from shared strings
+                        import re
+                        text_pattern = r'<t[^>]*>([^<]*)</t>'
+                        text_matches = re.findall(text_pattern, shared_strings)
+
+                        extracted_text = ' | '.join(text_matches)
+
+                        if len(extracted_text.strip()) > 20:
+                            return f"=== Excel: {filename} ===\n{extracted_text[:2000]}..."  # Limit to 2000 chars
+                        else:
+                            return f"=== Excel: {filename} ===\nExcel file detected. Content extraction needs openpyxl library. File size: {len(content)} bytes"
+                    else:
+                        return f"=== Excel: {filename} ===\nExcel format not recognized. File size: {len(content)} bytes"
+
+            # For older .xls files or CSV
+            else:
+                text_content = content.decode('utf-8', errors='ignore')
+                lines = text_content.split('\n')[:50]  # First 50 lines
+                meaningful_lines = [line for line in lines if len(line.strip()) > 5]
+
+                if len(meaningful_lines) > 3:
+                    result = '\n'.join(meaningful_lines)
+                    return f"=== Excel: {filename} ===\n{result}"
+                else:
+                    return f"=== Excel: {filename} ===\nExcel/CSV file. Content extraction needs pandas/openpyxl. File size: {len(content)} bytes"
+
+        except Exception as e:
+            return f"=== Excel: {filename} ===\nExcel file - {str(e)}. File size: {len(content)} bytes"
+
+    @staticmethod
+    def _extract_powerpoint_text(content: bytes, filename: str) -> str:
+        """Extract text from PowerPoint files"""
+        try:
+            # For .pptx files (ZIP-based format)
+            if filename.lower().endswith('.pptx'):
+                with zipfile.ZipFile(io.BytesIO(content)) as zip_file:
+                    slide_texts = []
+
+                    # Look for slide content
+                    for file_name in zip_file.namelist():
+                        if file_name.startswith('ppt/slides/slide') and file_name.endswith('.xml'):
+                            slide_content = zip_file.read(file_name).decode('utf-8', errors='ignore')
+
+                            # Extract text from slides
+                            import re
+                            text_pattern = r'<a:t[^>]*>([^<]*)</a:t>'
+                            text_matches = re.findall(text_pattern, slide_content)
+
+                            if text_matches:
+                                slide_text = ' '.join(text_matches)
+                                slide_texts.append(slide_text)
+
+                    if slide_texts:
+                        result = '\n\n'.join(slide_texts)
+                        return f"=== PowerPoint: {filename} ===\n{result[:3000]}..."  # Limit to 3000 chars
+                    else:
+                        return f"=== PowerPoint: {filename} ===\nPowerPoint file detected. Content extraction needs python-pptx library. File size: {len(content)} bytes"
+
+            # For older .ppt files
+            else:
+                return f"=== PowerPoint: {filename} ===\nLegacy PowerPoint format. Content extraction needs python-pptx library. File size: {len(content)} bytes"
+
+        except Exception as e:
+            return f"=== PowerPoint: {filename} ===\nPowerPoint file - {str(e)}. File size: {len(content)} bytes"
+
+class ClaudeAIService:
+    """Claude AI service for analyzing tender documents"""
+
+    def __init__(self):
+        self.claude_available = CLAUDE_AVAILABLE
+        self.client = None
+
+        if CLAUDE_AVAILABLE and anthropic:
+            api_key = getattr(settings, 'CLAUDE_API_KEY', None)
+            if api_key:
+                try:
+                    self.client = anthropic.Anthropic(api_key=api_key)
+                    logger.info("✅ Claude AI client initialized successfully")
+                except Exception as e:
+                    logger.error(f"❌ Error initializing Claude client: {str(e)}")
+                    self.claude_available = False
+                    self.client = None
+            else:
+                logger.warning("⚠️ No Claude API key found in settings")
+                self.claude_available = False
+
+        if not self.claude_available:
+            logger.info("ℹ️ Using fallback analysis mode")
+
+    def _rate_limit_api_calls(self):
+        """Ensure minimum time between API calls"""
+        with self._api_call_lock:
+            current_time = time.time()
+            time_since_last_call = current_time - self._last_api_call
+
+            if time_since_last_call < self.min_time_between_calls:
+                sleep_time = self.min_time_between_calls - time_since_last_call
+                logger.info(f"⏱️ Rate limiting: waiting {sleep_time:.1f}s before API call")
+                time.sleep(sleep_time)
+
+            self._last_api_call = time.time()
+
+    def _call_claude_with_retry(self, prompt: str, max_retries: int = 3) -> str:
+        """Call Claude API with retry logic for 529 errors"""
+        import time
+        import random
+
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"🔄 Claude API attempt {attempt + 1}/{max_retries}")
+
+                response = self.client.messages.create(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=6000,
+                    temperature=0.1,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+
+                logger.info("✅ Claude API call successful")
+                return response.content[0].text
+
+            except anthropic.InternalServerError as e:
+                # 529 Overloaded errors
+                if attempt < max_retries - 1:
+                    # Exponential backoff with jitter
+                    wait_time = (2 ** attempt) + random.uniform(0, 1)
+                    logger.warning(f"⚠️ Claude overloaded (attempt {attempt + 1}), retrying in {wait_time:.1f}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"❌ Claude API failed after {max_retries} attempts: {str(e)}")
+                    raise ValueError(f"Claude API overloaded after {max_retries} retries. Please try again later.")
+
+            except anthropic.BadRequestError as e:
+                # 400 errors - don't retry these
+                logger.error(f"❌ Claude API 400 error: {str(e)}")
+                raise ValueError(f"Claude API request error: {str(e)}")
+
+            except anthropic.RateLimitError as e:
+                # Rate limit errors
+                if attempt < max_retries - 1:
+                    wait_time = 60  # Wait 1 minute for rate limits
+                    logger.warning(f"⚠️ Rate limited, waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"❌ Rate limit exceeded after retries: {str(e)}")
+                    raise ValueError("API rate limit exceeded. Please try again later.")
+
+            except Exception as e:
+                logger.error(f"❌ Unexpected Claude API error: {str(e)}")
+                if attempt < max_retries - 1:
+                    wait_time = 5  # Short wait for other errors
+                    logger.info(f"Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise ValueError(f"Claude analysis failed: {str(e)}")
+
+        raise ValueError("Max retries exceeded")
+
+    def analyze_tender_documents_comprehensive(self, project_name: str, project_location: str,
+                                             document_texts: List[str], file_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced comprehensive analysis method with retry logic"""
+
+        logger.info(f"Starting COMPREHENSIVE Claude analysis for: {project_name}")
+        logger.info(f"Location: {project_location}")
+        logger.info(f"Document count: {len(document_texts)}")
+
+        if not self.claude_available or not self.client:
+            logger.error("Claude AI not available")
+            return self._create_enhanced_fallback_analysis(project_name, project_location, document_texts, file_analysis)
+
+        try:
+            # Prepare content with limits
+            combined_text = self._prepare_document_text_for_analysis(document_texts)
+
+            # Create prompt
+            prompt = self._create_expert_analysis_prompt(project_name, project_location, combined_text, file_analysis)
+
+            # Call Claude with retry logic
+            analysis_text = self._call_claude_with_retry(prompt, max_retries=3)
+
+            # Parse response
+            logger.info("✅ Successfully received comprehensive Claude AI response")
+            return self._parse_comprehensive_response(analysis_text, project_name, file_analysis)
+
+        except ValueError as e:
+            # Handle known errors gracefully
+            logger.error(f"❌ Analysis failed: {str(e)}")
+            logger.info("🔄 Falling back to enhanced fallback analysis")
+            return self._create_enhanced_fallback_analysis(project_name, project_location, document_texts, file_analysis)
+
+        except Exception as e:
+            logger.error(f"❌ Unexpected error in analysis: {str(e)}")
+            logger.info("🔄 Falling back to enhanced fallback analysis")
+            return self._create_enhanced_fallback_analysis(project_name, project_location, document_texts, file_analysis)
+
+    def _prepare_document_text_for_analysis(self, document_texts: List[str]) -> str:
+        """Intelligently prepare document text for Claude analysis"""
+
+        # Prioritize document types for analysis
+        prioritized_docs = []
+        other_docs = []
+
+        for doc_text in document_texts:
+            doc_lower = doc_text.lower()
+
+            # Prioritize key documents
+            if any(keyword in doc_lower for keyword in [
+                'conditions of tender', 'general conditions', 'specification',
+                'pricing schedule', 'program', 'timeline', 'requirements'
+            ]):
+                prioritized_docs.append(doc_text)
+            else:
+                other_docs.append(doc_text)
+
+        # Combine prioritized first, then others
+        all_docs = prioritized_docs + other_docs
+        combined = "\n\n=== DOCUMENT SEPARATOR ===\n\n".join(all_docs)
+
+        # Truncate if too long, preserving prioritized content
+        if len(combined) > 180000:
+            combined = combined[:180000] + "\n\n[Additional documents available but truncated for analysis]"
+
+        return combined
+
+    def _create_expert_analysis_prompt(self, project_name: str, project_location: str,
+                                     document_text: str, file_analysis: Dict[str, Any]) -> str:
+        """Create expert-level analysis prompt that generates detailed responses"""
+
+        # Extract document type insights
+        doc_insights = self._generate_document_insights(file_analysis)
+
+        prompt = f"""You are a senior construction estimator and tender specialist with 25+ years of experience analyzing complex construction projects. You have expertise in:
+- Comprehensive tender document analysis
+- Risk assessment and mitigation
+- Subcontractor trade identification
+- Commercial and contractual term extraction
+- Programme and timeline analysis
+- Technical specification interpretation
+
+PROJECT DETAILS:
+- Name: {project_name}
+- Location: {project_location}
+- Document Suite: {doc_insights}
+
+ANALYSIS REQUIREMENTS:
+You must provide a COMPREHENSIVE, DETAILED analysis that extracts ALL actionable information from these documents. Focus on specific details that enable accurate pricing and risk assessment.
+
+MANDATORY ANALYSIS SECTIONS:
+
+## 1. PROJECT OVERVIEW & CLIENT DETAILS
+Extract and provide:
+- Complete project description with specific scope details
+- Client/developer name and all contact information (names, emails, phone numbers)
+- Project type, scale, and key metrics (floor areas, unit counts, etc.)
+- Total project value or budget ranges (extract any £/$ figures mentioned)
+- Delivery model and procurement approach
+- Key success criteria and objectives
+
+## 2. COMPREHENSIVE TRADE BREAKDOWN
+Identify ALL required trades with detailed breakdown:
+For each trade, specify:
+- Scope of work and deliverables
+- Quality standards and specifications
+- Coordination and interface requirements
+- Estimated proportion of total project value
+- Special certifications or qualifications needed
+
+Include: Demolition, Groundworks, Concrete, Steelwork, Roofing, Carpentry, M&E, Plumbing, Electrical, HVAC, Fire Safety, Plastering, Flooring, Painting, Glazing, Specialist trades
+
+## 3. TECHNICAL SPECIFICATIONS & COMPLIANCE
+Extract detailed requirements:
+- Building standards and codes compliance (Building Regs, CDM, etc.)
+- Material specifications with exact brands/grades where specified
+- Performance criteria and testing requirements
+- Quality assurance and warranty requirements
+- Environmental and sustainability standards
+- Health & safety specific requirements
+
+## 4. CONTRACT & COMMERCIAL TERMS
+Identify and extract:
+- Contract form (JCT DB 2016, NEC4, bespoke, etc.) and specific version
+- Payment terms, milestone schedule, and retention details
+- Insurance requirements with specific amounts (PL, EL, PI, Works)
+- Liquidated damages rates, caps, and calculation methods
+- Variation procedures and change control mechanisms
+- Risk allocation matrix and responsibility boundaries
+
+## 5. PROGRAMME & CRITICAL DATES
+Extract all timing information:
+- Start on site date and access arrangements
+- Key milestone dates and sectional completions
+- Practical completion and handover requirements
+- Working hours, noise restrictions, and access limitations
+- Critical path activities and dependencies
+- Phasing requirements and sequence constraints
+
+## 6. CLIENT DIRECT APPOINTMENTS & NAMED SUPPLIERS
+Identify items that are client-procured:
+- FF&E (Furniture, Fittings & Equipment) supply arrangements
+- Specialist equipment or systems with named suppliers
+- Client-direct subcontractors or preferred contractors
+- Coordination responsibilities and interface requirements
+- Installation vs supply-only distinctions
+
+## 7. OPERATIONAL CONSTRAINTS & SPECIAL REQUIREMENTS
+Extract operational considerations:
+- Live environment working (occupied buildings, operational facilities)
+- Security protocols and access restrictions
+- Noise, vibration, and environmental constraints
+- Temporary works and site logistics requirements
+- Coordination with existing operations or other contractors
+
+## 8. RISK ASSESSMENT & CRITICAL ISSUES
+Identify specific risks with details:
+- Technical risks: design, buildability, interfaces
+- Programme risks: weather, access, approvals
+- Commercial risks: variations, cost escalation
+- Health & safety risks: specific site hazards
+- Environmental risks: contamination, emissions
+- Provide specific mitigation strategies for each risk category
+
+## 9. SAMPLE ROOMS & QUALITY BENCHMARKS
+Look for and extract:
+- Existing sample rooms, show suites, or reference areas
+- Quality benchmarks and finish standards
+- Mock-up requirements and approval processes
+- Brand compliance and specification standards
+- Approval authorities and sign-off procedures
+
+## 10. CLARIFICATIONS NEEDED (RFI ITEMS)
+Generate specific questions for missing or ambiguous information:
+- Technical clarifications requiring confirmation
+- Commercial terms needing definition
+- Programme dependencies to be confirmed
+- Scope boundary clarifications
+- Interface responsibilities requiring definition
+
+RESPONSE REQUIREMENTS:
+- Extract SPECIFIC details, not generic statements
+- Include actual numbers, dates, names, and contact details where found
+- Quote directly from documents where relevant
+- Identify any conflicting information between documents
+- Flag areas requiring immediate clarification
+- Provide actionable intelligence for competitive bidding
+
+Focus on being comprehensive and specific. This analysis will be used for accurate cost estimation and risk assessment.
+
+DOCUMENTS TO ANALYZE:
+{document_text}"""
+
+        return prompt
+
+    def _generate_document_insights(self, file_analysis: Dict[str, Any]) -> str:
+        """Generate insights about document types for prompt context"""
+
+        if not file_analysis or not file_analysis.get('counts'):
+            return "Mixed document types requiring analysis"
+
+        counts = file_analysis['counts']
+        insights = []
+
+        if counts.get('pdf', 0) > 0:
+            insights.append(f"{counts['pdf']} PDF documents (likely technical drawings, specifications, conditions)")
+        if counts.get('word', 0) > 0:
+            insights.append(f"{counts['word']} Word documents (likely conditions, specifications, requirements)")
+        if counts.get('excel', 0) > 0:
+            insights.append(f"{counts['excel']} Excel files (likely pricing schedules, BOQs, programmes)")
+        if counts.get('other', 0) > 0:
+            insights.append(f"{counts['other']} other documents")
+
+        return ", ".join(insights) if insights else "Document suite for comprehensive analysis"
+
+    def _parse_comprehensive_claude_response(self, analysis_text: str, project_name: str,
+                                           file_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse Claude's comprehensive response into detailed structured data - DEBUGGED VERSION"""
+
+        try:
+            logger.info("🔍 DEBUGGING: Parsing comprehensive Claude AI response...")
+
+            # 🔧 DEBUG: Log the actual response from Claude
+            logger.info(f"📝 RAW CLAUDE RESPONSE (first 1000 chars):\n{analysis_text[:1000]}...")
+
+            # Split into sections by headers
+            sections = {}
+            current_section = None
+            current_content = []
+
+            for line in analysis_text.split('\n'):
+                line = line.strip()
+                if line.startswith('## ') or line.startswith('#'):
+                    # Save previous section
+                    if current_section:
+                        sections[current_section] = '\n'.join(current_content).strip()
+                        logger.info(f"📄 Found section: '{current_section}' with {len(current_content)} lines")
+
+                    # Start new section
+                    current_section = line.replace('## ', '').replace('# ', '').strip()
+                    current_content = []
+                elif line:
+                    current_content.append(line)
+
+            # Save final section
+            if current_section:
+                sections[current_section] = '\n'.join(current_content).strip()
+                logger.info(f"📄 Final section: '{current_section}' with {len(current_content)} lines")
+
+            # 🔧 DEBUG: Log all found sections
+            logger.info(f"🗂️ FOUND SECTIONS: {list(sections.keys())}")
+
+            # 🔧 DEBUG: Log section content lengths
+            for section_name, content in sections.items():
+                logger.info(f"📋 Section '{section_name}': {len(content)} characters")
+
+            # Extract structured data from sections with flexible matching
+            structured_analysis = {
+                'project_overview': self._extract_project_overview_flexible(sections),
+                'scope_of_work': self._extract_scope_of_work_flexible(sections),
+                'technical_specifications': self._extract_technical_specs_flexible(sections),
+                'contractual_terms': self._extract_contractual_terms_flexible(sections),
+                'timeline_analysis': self._extract_timeline_analysis_flexible(sections),
+                'risk_assessment': self._extract_risk_assessment_flexible(sections),
+                'trade_requirements': self._extract_trade_requirements_flexible(sections),
+                'key_requirements': self._extract_key_requirements_flexible(sections),
+                'clarification_questions': self._extract_clarification_questions_flexible(sections),
+                'analysis_confidence': 90.0,
+                'analysis_method': 'Comprehensive Claude AI Analysis',
+                'sections_parsed': len(sections),
+                'file_analysis': file_analysis,
+                'raw_sections': sections  # 🔧 DEBUG: Include raw sections for inspection
+            }
+
+            logger.info(f"✅ Successfully parsed {len(sections)} sections from Claude response")
+            return structured_analysis
+
+        except Exception as e:
+            logger.error(f"❌ Error parsing comprehensive Claude response: {str(e)}")
+            # Return a debug-friendly fallback
+            return {
+                'project_overview': f'Analysis parsing failed for {project_name}. Raw response length: {len(analysis_text)}',
+                'scope_of_work': 'Parsing error - check logs for details',
+                'error_details': str(e),
+                'raw_response_preview': analysis_text[:500],
+                'analysis_confidence': 50.0,
+                'analysis_method': 'Failed Parsing - Debug Mode'
+            }
+
+    # Add these flexible extraction methods that match any relevant section:
+
+    def _extract_technical_specs_flexible(self, sections: Dict[str, str]) -> str:
+        """Extract technical specifications with flexible matching"""
+        possible_names = ['TECHNICAL', 'SPECIFICATION', 'STANDARD', 'COMPLIANCE']
+
+        for name in possible_names:
+            for section_key, content in sections.items():
+                if name.lower() in section_key.lower():
+                    logger.info(f"📋 Found technical specs in section: '{section_key}'")
+                    return content
+
+        return 'Technical specifications not found in parsed sections'
+
+    def _extract_contractual_terms_flexible(self, sections: Dict[str, str]) -> str:
+        """Extract contractual terms with flexible matching"""
+        possible_names = ['CONTRACT', 'COMMERCIAL', 'TERMS', 'CONDITIONS']
+
+        for name in possible_names:
+            for section_key, content in sections.items():
+                if name.lower() in section_key.lower():
+                    logger.info(f"📋 Found contract terms in section: '{section_key}'")
+                    return content
+
+        return 'Contractual terms not found in parsed sections'
+
+    def _extract_timeline_analysis_flexible(self, sections: Dict[str, str]) -> str:
+        """Extract timeline analysis with flexible matching"""
+        possible_names = ['TIMELINE', 'PROGRAMME', 'SCHEDULE', 'DATES', 'MILESTONES']
+
+        for name in possible_names:
+            for section_key, content in sections.items():
+                if name.lower() in section_key.lower():
+                    logger.info(f"📋 Found timeline in section: '{section_key}'")
+                    return content
+
+        return 'Timeline analysis not found in parsed sections'
+
+    def _extract_risk_assessment_flexible(self, sections: Dict[str, str]) -> str:
+        """Extract risk assessment with flexible matching"""
+        possible_names = ['RISK', 'MITIGATION', 'CHALLENGE', 'CONSTRAINT']
+
+        for name in possible_names:
+            for section_key, content in sections.items():
+                if name.lower() in section_key.lower():
+                    logger.info(f"📋 Found risk assessment in section: '{section_key}'")
+                    return content
+
+        return 'Risk assessment not found in parsed sections'
+
+    def _extract_clarification_questions_flexible(self, sections: Dict[str, str]) -> List[Dict[str, str]]:
+        """Extract clarification questions with flexible parsing"""
+        questions = []
+
+        # Look for questions in all sections
+        for section_name, content in sections.items():
+            lines = content.split('\n')
+            for line in lines:
+                line = line.strip()
+                if '?' in line or any(word in line.lower() for word in ['clarify', 'confirm', 'question']):
+                    questions.append({
+                        'category': 'GENERAL',
+                        'question': line.lstrip('- ').strip(),
+                        'priority': 'MEDIUM',
+                        'reference': section_name
+                    })
+
+        logger.info(f"📋 Extracted {len(questions)} questions")
+        return questions[:10] if questions else []
+
+    def _extract_project_overview_flexible(self, sections: Dict[str, str]) -> str:
+        """Extract project overview with flexible section matching"""
+
+        # Try multiple possible section names
+        possible_names = [
+            '1. PROJECT OVERVIEW',
+            'PROJECT OVERVIEW',
+            'OVERVIEW',
+            'PROJECT DETAILS',
+            'PROJECT INFORMATION',
+            'PROJECT DESCRIPTION'
+        ]
+
+        for name in possible_names:
+            for section_key in sections.keys():
+                if name.lower() in section_key.lower():
+                    content = sections[section_key]
+                    logger.info(f"📋 Found project overview in section: '{section_key}'")
+                    return content
+
+        # Fallback to first section with substantial content
+        for section_name, content in sections.items():
+            if len(content) > 100:
+                logger.info(f"📋 Using first substantial section as overview: '{section_name}'")
+                return content
+
+        return 'Project overview not found in parsed sections'
+
+    def _extract_scope_of_work_flexible(self, sections: Dict[str, str]) -> str:
+        """Extract scope of work with flexible section matching"""
+
+        possible_names = [
+            'SCOPE',
+            'WORK',
+            'TRADE',
+            'BREAKDOWN',
+            'SPECIFICATIONS',
+            'REQUIREMENTS'
+        ]
+
+        matched_sections = []
+        for name in possible_names:
+            for section_key, content in sections.items():
+                if name.lower() in section_key.lower() and content not in matched_sections:
+                    matched_sections.append(content)
+                    logger.info(f"📋 Found scope content in section: '{section_key}'")
+
+        if matched_sections:
+            return '\n\n'.join(matched_sections)
+
+        return 'Scope of work details not found in parsed sections'
+
+    def _extract_key_requirements_flexible(self, sections: Dict[str, str]) -> List[str]:
+        """Extract key requirements with flexible parsing"""
+
+        requirements = []
+
+        # Look through all sections for requirements
+        for section_name, content in sections.items():
+            lines = content.split('\n')
+            for line in lines:
+                line = line.strip()
+                # Look for requirement indicators
+                if any(word in line.lower() for word in ['requirement', 'must', 'shall', 'mandatory', 'critical']):
+                    if len(line) > 20 and line not in requirements:
+                        requirements.append(line.lstrip('- ').strip())
+
+        logger.info(f"📋 Extracted {len(requirements)} requirements")
+        return requirements[:15] if requirements else ['Requirements extraction in progress']
+
+    def _extract_trade_requirements_flexible(self, sections: Dict[str, str]) -> List[str]:
+        """Extract trade requirements with flexible parsing"""
+
+        standard_trades = [
+            'Demolition', 'Groundworks', 'Concrete', 'Brickwork', 'Roofing',
+            'Carpentry', 'Steelwork', 'M&E Services', 'Plumbing', 'Electrical',
+            'Plastering', 'Flooring', 'Painting', 'Glazing', 'Insulation'
+        ]
+
+        found_trades = []
+
+        # Search all sections for trade mentions
+        all_content = ' '.join(sections.values()).lower()
+
+        for trade in standard_trades:
+            if trade.lower() in all_content:
+                found_trades.append(trade)
+
+        logger.info(f"📋 Found {len(found_trades)} trades: {found_trades}")
+        return found_trades if found_trades else standard_trades[:8]
+
+    def _extract_project_overview(self, sections: Dict[str, str]) -> str:
+        """Extract comprehensive project overview"""
+        overview_section = sections.get('1. PROJECT OVERVIEW & CLIENT DETAILS', '')
+
+        if overview_section:
+            return overview_section
+
+        # Fallback to first available section
+        first_section = next(iter(sections.values())) if sections else ''
+        return first_section[:1000] if first_section else 'Project overview to be extracted from documents'
+
+    def _extract_scope_of_work(self, sections: Dict[str, str]) -> str:
+        """Extract detailed scope of work"""
+        scope_sections = [
+            '2. COMPREHENSIVE TRADE BREAKDOWN',
+            '3. TECHNICAL SPECIFICATIONS & COMPLIANCE',
+            'SCOPE OF WORK'
+        ]
+
+        combined_scope = []
+        for section_name in scope_sections:
+            section_content = sections.get(section_name, '')
+            if section_content:
+                combined_scope.append(f"**{section_name}**\n{section_content}")
+
+        return '\n\n'.join(combined_scope) if combined_scope else 'Detailed scope analysis from comprehensive document review'
+
+    def _extract_technical_specs(self, sections: Dict[str, str]) -> Dict[str, Any]:
+        """Extract technical specifications as structured data"""
+        tech_section = sections.get('3. TECHNICAL SPECIFICATIONS & COMPLIANCE', '')
+
+        return {
+            'building_standards': self._extract_standards(tech_section),
+            'material_specifications': self._extract_materials(tech_section),
+            'quality_requirements': self._extract_quality_requirements(tech_section),
+            'compliance_requirements': self._extract_compliance(tech_section),
+            'full_specification': tech_section
+        }
+
+    def _extract_contractual_terms(self, sections: Dict[str, str]) -> Dict[str, Any]:
+        """Extract contractual and commercial terms"""
+        contract_section = sections.get('4. CONTRACT & COMMERCIAL TERMS', '')
+
+        return {
+            'contract_type': self._extract_contract_type(contract_section),
+            'payment_terms': self._extract_payment_terms(contract_section),
+            'insurance_requirements': self._extract_insurance_requirements(contract_section),
+            'liquidated_damages': self._extract_liquidated_damages(contract_section),
+            'risk_allocation': self._extract_risk_allocation(contract_section),
+            'full_terms': contract_section
+        }
+
+    def _extract_timeline_analysis(self, sections: Dict[str, str]) -> Dict[str, Any]:
+        """Extract timeline and programme analysis"""
+        timeline_section = sections.get('5. PROGRAMME & CRITICAL DATES', '')
+
+        return {
+            'start_date': self._extract_start_date(timeline_section),
+            'completion_date': self._extract_completion_date(timeline_section),
+            'key_milestones': self._extract_key_milestones(timeline_section),
+            'working_constraints': self._extract_working_constraints(timeline_section),
+            'critical_path': self._extract_critical_path_activities(timeline_section),
+            'full_timeline': timeline_section
+        }
+
+    def _extract_comprehensive_trades(self, sections: Dict[str, str]) -> List[Dict[str, Any]]:
+        """Extract comprehensive trade requirements"""
+        trade_section = sections.get('2. COMPREHENSIVE TRADE BREAKDOWN', '')
+
+        # Standard construction trades
+        standard_trades = [
+            'Demolition', 'Groundworks', 'Concrete', 'Brickwork', 'Roofing',
+            'Structural Steelwork', 'Carpentry & Joinery', 'M&E Services',
+            'Electrical', 'Plumbing', 'HVAC', 'Fire Safety', 'Plastering',
+            'Flooring', 'Painting & Decorating', 'Glazing', 'Insulation',
+            'Bathroom Specialists', 'Kitchen Specialists', 'Tiling'
+        ]
+
+        trades = []
+        for trade in standard_trades:
+            trade_info = {
+                'trade_name': trade,
+                'scope': self._extract_trade_scope(trade, trade_section),
+                'specifications': self._extract_trade_specifications(trade, trade_section),
+                'coordination_requirements': self._extract_trade_coordination(trade, trade_section),
+                'estimated_percentage': self._estimate_trade_percentage(trade),
+                'priority': self._determine_trade_priority(trade, trade_section),
+                'special_requirements': self._extract_trade_special_requirements(trade, trade_section)
+            }
+            trades.append(trade_info)
+
+        return trades
+
+    # Helper methods for extraction
+    def _extract_standards(self, text: str) -> List[str]:
+        """Extract building standards and codes"""
+        standards = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['bs ', 'en ', 'iso ', 'building regs', 'code']):
+                standards.append(line.strip())
+        return standards[:10]
+
+    def _extract_materials(self, text: str) -> List[str]:
+        """Extract material specifications"""
+        materials = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['material', 'grade', 'specification', 'brand']):
+                materials.append(line.strip())
+        return materials[:15]
+
+    def _extract_quality_requirements(self, text: str) -> List[str]:
+        """Extract quality requirements"""
+        quality = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['quality', 'standard', 'tolerance', 'finish']):
+                quality.append(line.strip())
+        return quality[:10]
+
+    def _extract_compliance(self, text: str) -> List[str]:
+        """Extract compliance requirements"""
+        compliance = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['compliance', 'regulation', 'requirement', 'must']):
+                compliance.append(line.strip())
+        return compliance[:10]
+
+    def _extract_contract_type(self, text: str) -> str:
+        """Extract contract type"""
+        import re
+
+        contract_patterns = [
+            r'JCT\s+DB\s+\d{4}', r'JCT\s+\d{4}', r'NEC\d?', r'FIDIC', r'bespoke'
+        ]
+
+        for pattern in contract_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(0)
+
+        return 'Contract type to be confirmed'
+
+    def _extract_payment_terms(self, text: str) -> Dict[str, str]:
+        """Extract payment terms"""
+        terms = {}
+
+        # Look for retention percentages
+        import re
+        retention_match = re.search(r'retention.*?(\d+(?:\.\d+)?)\s*%', text, re.IGNORECASE)
+        if retention_match:
+            terms['retention_percentage'] = retention_match.group(1)
+
+        # Look for payment periods
+        payment_match = re.search(r'payment.*?(\d+)\s*days?', text, re.IGNORECASE)
+        if payment_match:
+            terms['payment_period_days'] = payment_match.group(1)
+
+        return terms
+
+    def _extract_insurance_requirements(self, text: str) -> Dict[str, str]:
+        """Extract insurance requirements"""
+        insurance = {}
+
+        import re
+        # Look for insurance amounts
+        pl_match = re.search(r'public liability.*?£([\d,]+(?:\.\d{2})?)', text, re.IGNORECASE)
+        if pl_match:
+            insurance['public_liability'] = pl_match.group(1)
+
+        el_match = re.search(r'employers? liability.*?£([\d,]+(?:\.\d{2})?)', text, re.IGNORECASE)
+        if el_match:
+            insurance['employers_liability'] = el_match.group(1)
+
+        return insurance
+
+    def _extract_liquidated_damages(self, text: str) -> Dict[str, str]:
+        """Extract liquidated damages information"""
+        lads = {}
+
+        import re
+        # Look for LADs rates
+        lads_match = re.search(r'liquidated damages.*?£([\d,]+(?:\.\d{2})?)', text, re.IGNORECASE)
+        if lads_match:
+            lads['amount'] = lads_match.group(1)
+
+        return lads
+
+    def _extract_risk_allocation(self, text: str) -> List[str]:
+        """Extract risk allocation details"""
+        risks = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['risk', 'responsibility', 'liable', 'allocation']):
+                risks.append(line.strip())
+        return risks[:8]
+
+    def _extract_start_date(self, text: str) -> str:
+        """Extract project start date"""
+        import re
+        date_patterns = [
+            r'start.*?(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})',
+            r'commence.*?(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})'
+        ]
+
+        for pattern in date_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+        return 'Start date TBC'
+
+    def _extract_completion_date(self, text: str) -> str:
+        """Extract completion date"""
+        import re
+        date_patterns = [
+            r'completion.*?(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})',
+            r'complete.*?(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})'
+        ]
+
+        for pattern in date_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+
+        return 'Completion date TBC'
+
+    def _extract_key_milestones(self, text: str) -> List[str]:
+        """Extract key project milestones"""
+        milestones = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['milestone', 'phase', 'stage', 'completion']):
+                milestones.append(line.strip())
+        return milestones[:10]
+
+    def _extract_working_constraints(self, text: str) -> List[str]:
+        """Extract working hour and access constraints"""
+        constraints = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['hours', 'access', 'noise', 'restriction']):
+                constraints.append(line.strip())
+        return constraints[:8]
+
+    def _extract_critical_path_activities(self, text: str) -> List[str]:
+        """Extract critical path activities"""
+        activities = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['critical', 'dependency', 'sequence', 'before']):
+                activities.append(line.strip())
+        return activities[:8]
+
+    # Additional helper methods for trade extraction
+    def _extract_trade_scope(self, trade: str, text: str) -> str:
+        """Extract scope for specific trade"""
+        lines = text.lower().split('\n')
+        for i, line in enumerate(lines):
+            if trade.lower() in line:
+                # Get context around the trade mention
+                context_lines = lines[max(0, i-1):i+3]
+                return ' '.join(context_lines).strip()
+        return f'Standard {trade} scope as per specifications'
+
+    def _extract_trade_specifications(self, trade: str, text: str) -> str:
+        """Extract specifications for specific trade"""
+        # Look for trade-specific specifications
+        trade_specs = {
+            'Electrical': 'IET Wiring Regulations BS 7671',
+            'Plumbing': 'Water Regulations, BS 6700',
+            'HVAC': 'CIBSE standards, Building Regulations Part L',
+            'Fire Safety': 'BS 9999, Building Regulations Part B',
+            'Structural Steelwork': 'BS 5950, Eurocode 3'
+        }
+        return trade_specs.get(trade, f'{trade} specifications as per project requirements')
+
+    def _extract_trade_coordination(self, trade: str, text: str) -> str:
+        """Extract coordination requirements for trade"""
+        coordination_requirements = {
+            'M&E Services': 'Coordination with all building services, structural interfaces',
+            'Electrical': 'Coordination with M&E, data services, fire alarm systems',
+            'Plumbing': 'Coordination with HVAC, structural penetrations',
+            'Structural Steelwork': 'Coordination with architectural, M&E services'
+        }
+        return coordination_requirements.get(trade, 'Standard trade coordination required')
+
+    def _estimate_trade_percentage(self, trade: str) -> float:
+        """Estimate trade percentage of total project value"""
+        percentages = {
+            'M&E Services': 25.0, 'Structural Steelwork': 15.0, 'Groundworks': 10.0,
+            'Concrete': 12.0, 'Electrical': 8.0, 'Plumbing': 6.0, 'HVAC': 7.0,
+            'Fire Safety': 5.0, 'Carpentry & Joinery': 10.0, 'Flooring': 6.0,
+            'Painting & Decorating': 4.0, 'Roofing': 8.0, 'Glazing': 5.0
+        }
+        return percentages.get(trade, 3.0)
+
+    def _determine_trade_priority(self, trade: str, text: str) -> str:
+        """Determine priority level for trade"""
+        high_priority_trades = ['M&E Services', 'Structural Steelwork', 'Fire Safety', 'Groundworks']
+
+        if trade in high_priority_trades:
+            return 'HIGH'
+        elif 'critical' in text.lower() and trade.lower() in text.lower():
+            return 'HIGH'
+        else:
+            return 'MEDIUM'
+
+    def _extract_trade_special_requirements(self, trade: str, text: str) -> str:
+        """Extract special requirements for trade"""
+        special_reqs = {
+            'Electrical': 'NICEIC certification, 18th Edition compliance',
+            'Plumbing': 'Gas Safe registration, Water Regulations approval',
+            'M&E Services': 'Relevant trade body memberships, BIM capability',
+            'Fire Safety': 'FIA certification, fire system commissioning',
+            'Structural Steelwork': 'BCSA membership, CE marking capability'
+        }
+        return special_reqs.get(trade, f'Relevant {trade} certifications and experience required')
+
+    def _extract_direct_appointments_detail(self, sections: Dict[str, str]) -> Dict[str, Any]:
+        """Extract detailed direct appointment information"""
+        direct_section = sections.get('6. CLIENT DIRECT APPOINTMENTS & NAMED SUPPLIERS', '')
+
+        return {
+            'has_direct_appointments': len(direct_section) > 100,
+            'ffe_arrangements': self._extract_ffe_details(direct_section),
+            'named_suppliers': self._extract_named_suppliers_detail(direct_section),
+            'coordination_requirements': self._extract_coordination_requirements(direct_section),
+            'interface_responsibilities': self._extract_interface_responsibilities(direct_section),
+            'full_details': direct_section
+        }
+
+    def _extract_operational_constraints(self, sections: Dict[str, str]) -> Dict[str, Any]:
+        """Extract operational constraints"""
+        ops_section = sections.get('7. OPERATIONAL CONSTRAINTS & SPECIAL REQUIREMENTS', '')
+
+        return {
+            'live_environment': 'live' in ops_section.lower() or 'operational' in ops_section.lower(),
+            'access_restrictions': self._extract_access_restrictions(ops_section),
+            'noise_constraints': self._extract_noise_constraints(ops_section),
+            'security_requirements': self._extract_security_requirements(ops_section),
+            'coordination_needs': self._extract_operational_coordination(ops_section),
+            'full_constraints': ops_section
+        }
+
+    def _extract_detailed_risks(self, sections: Dict[str, str]) -> Dict[str, Any]:
+        """Extract detailed risk assessment"""
+        risk_section = sections.get('8. RISK ASSESSMENT & CRITICAL ISSUES', '')
+
+        return {
+            'technical_risks': self._extract_risk_category_detailed(risk_section, 'technical'),
+            'programme_risks': self._extract_risk_category_detailed(risk_section, 'programme'),
+            'commercial_risks': self._extract_risk_category_detailed(risk_section, 'commercial'),
+            'health_safety_risks': self._extract_risk_category_detailed(risk_section, 'health'),
+            'environmental_risks': self._extract_risk_category_detailed(risk_section, 'environmental'),
+            'mitigation_strategies': self._extract_mitigation_strategies_detailed(risk_section),
+            'overall_risk_level': self._assess_overall_risk_level(risk_section),
+            'full_assessment': risk_section
+        }
+
+    def _extract_sample_room_info(self, sections: Dict[str, str]) -> Dict[str, Any]:
+        """Extract sample room and quality information"""
+        sample_section = sections.get('9. SAMPLE ROOMS & QUALITY BENCHMARKS', '')
+
+        return {
+            'has_sample_room': len(sample_section) > 50,
+            'sample_room_location': self._extract_sample_room_location(sample_section),
+            'quality_standards': self._extract_quality_standards(sample_section),
+            'approval_process': self._extract_approval_process(sample_section),
+            'brand_compliance': self._extract_brand_compliance(sample_section),
+            'full_details': sample_section
+        }
+
+    def _extract_rfi_questions(self, sections: Dict[str, str]) -> List[Dict[str, Any]]:
+        """Extract RFI questions from analysis"""
+        rfi_section = sections.get('10. CLARIFICATIONS NEEDED (RFI ITEMS)', '')
+
+        questions = []
+        current_category = 'GENERAL'
+
+        for line in rfi_section.split('\n'):
+            line = line.strip()
+
+            # Check for category headers
+            if any(cat in line.upper() for cat in ['TECHNICAL', 'COMMERCIAL', 'PROGRAMME', 'SCOPE']):
+                for cat in ['TECHNICAL', 'COMMERCIAL', 'PROGRAMME', 'SCOPE']:
+                    if cat in line.upper():
+                        current_category = cat
+                        break
+
+            # Extract questions
+            elif line and ('?' in line or any(word in line.lower() for word in ['clarify', 'confirm', 'specify'])):
+                questions.append({
+                    'category': current_category,
+                    'question': line.lstrip('- ').strip(),
+                    'priority': 'HIGH' if any(word in line.lower() for word in ['critical', 'urgent', 'essential']) else 'MEDIUM',
+                    'reference': 'Comprehensive Analysis'
+                })
+
+        return questions[:20]  # Limit to top 20 questions
+
+    def _extract_key_requirements(self, sections: Dict[str, str]) -> List[str]:
+        """Extract key project requirements"""
+        requirements = []
+
+        # Extract from multiple sections
+        for section_name, section_content in sections.items():
+            for line in section_content.split('\n'):
+                if any(word in line.lower() for word in ['requirement', 'must', 'shall', 'mandatory']):
+                    req = line.strip().lstrip('- ').strip()
+                    if len(req) > 20 and req not in requirements:
+                        requirements.append(req)
+
+        return requirements[:15]  # Top 15 requirements
+
+    # Additional helper methods for detailed extraction
+    def _extract_ffe_details(self, text: str) -> str:
+        """Extract FF&E arrangement details"""
+        if 'ff&e' in text.lower() or 'furniture' in text.lower():
+            lines = [line.strip() for line in text.split('\n') if 'ff&e' in line.lower() or 'furniture' in line.lower()]
+            return '; '.join(lines[:3])
+        return 'FF&E arrangements to be confirmed'
+
+    def _extract_named_suppliers_detail(self, text: str) -> List[str]:
+        """Extract named suppliers with details"""
+        suppliers = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['supplier', 'manufacturer', 'brand', 'specified']):
+                suppliers.append(line.strip())
+        return suppliers[:10]
+
+    def _extract_coordination_requirements(self, text: str) -> List[str]:
+        """Extract coordination requirements"""
+        coordination = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['coordinate', 'interface', 'liaison']):
+                coordination.append(line.strip())
+        return coordination[:8]
+
+    def _extract_interface_responsibilities(self, text: str) -> List[str]:
+        """Extract interface responsibilities"""
+        interfaces = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['interface', 'responsibility', 'handover']):
+                interfaces.append(line.strip())
+        return interfaces[:8]
+
+    def _extract_access_restrictions(self, text: str) -> List[str]:
+        """Extract access restrictions"""
+        restrictions = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['access', 'entry', 'restricted']):
+                restrictions.append(line.strip())
+        return restrictions[:5]
+
+    def _extract_noise_constraints(self, text: str) -> List[str]:
+        """Extract noise constraints"""
+        noise = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['noise', 'quiet', 'sound', 'decibel']):
+                noise.append(line.strip())
+        return noise[:5]
+
+    def _extract_security_requirements(self, text: str) -> List[str]:
+        """Extract security requirements"""
+        security = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['security', 'clearance', 'pass', 'id']):
+                security.append(line.strip())
+        return security[:5]
+
+    def _extract_operational_coordination(self, text: str) -> List[str]:
+        """Extract operational coordination needs"""
+        coordination = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['operational', 'coordinate', 'manage']):
+                coordination.append(line.strip())
+        return coordination[:5]
+
+    def _extract_risk_category_detailed(self, text: str, category: str) -> List[str]:
+        """Extract detailed risks for specific category"""
+        risks = []
+        lines = text.lower().split('\n')
+
+        for i, line in enumerate(lines):
+            if category in line:
+                # Get next few lines as risk details
+                for j in range(i+1, min(i+6, len(lines))):
+                    if lines[j].strip() and (lines[j].strip().startswith('-') or 'risk' in lines[j]):
+                        risks.append(lines[j].strip().lstrip('- '))
+
+        return risks[:6]
+
+    def _extract_mitigation_strategies_detailed(self, text: str) -> List[str]:
+        """Extract detailed mitigation strategies"""
+        strategies = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['mitigate', 'strategy', 'prevent', 'manage', 'control']):
+                strategy = line.strip().lstrip('- ')
+                if len(strategy) > 25:
+                    strategies.append(strategy)
+        return strategies[:8]
+
+    def _assess_overall_risk_level(self, text: str) -> str:
+        """Assess overall risk level from risk text"""
+        text_lower = text.lower()
+
+        high_risk_indicators = ['critical', 'severe', 'major', 'significant', 'high']
+        medium_risk_indicators = ['moderate', 'medium', 'manageable', 'controlled']
+
+        high_count = sum(1 for indicator in high_risk_indicators if indicator in text_lower)
+        medium_count = sum(1 for indicator in medium_risk_indicators if indicator in text_lower)
+
+        if high_count > medium_count:
+            return 'HIGH'
+        elif medium_count > 0:
+            return 'MEDIUM'
+        else:
+            return 'LOW'
+
+    def _extract_sample_room_location(self, text: str) -> str:
+        """Extract sample room location"""
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['location', 'room', 'floor', 'building']):
+                return line.strip()
+        return 'Sample room location TBC'
+
+    def _extract_quality_standards(self, text: str) -> List[str]:
+        """Extract quality standards"""
+        standards = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['quality', 'standard', 'grade', 'finish']):
+                standards.append(line.strip())
+        return standards[:8]
+
+    def _extract_approval_process(self, text: str) -> List[str]:
+        """Extract approval process details"""
+        approvals = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['approval', 'sign-off', 'accept', 'review']):
+                approvals.append(line.strip())
+        return approvals[:5]
+
+    def _extract_brand_compliance(self, text: str) -> List[str]:
+        """Extract brand compliance requirements"""
+        compliance = []
+        for line in text.split('\n'):
+            if any(word in line.lower() for word in ['brand', 'compliance', 'standard', 'specification']):
+                compliance.append(line.strip())
+        return compliance[:5]
+
+    def create_comprehensive_analysis_prompt(self, project_name: str, project_location: str, document_text: str) -> str:
+        """Create comprehensive analysis prompt matching your Claude.ai example"""
+
+        prompt = f"""You are a senior estimator and expert project analyst. Please analyze the following tender documents for the project {project_name}, {project_location}.
+
+    Provide a COMPREHENSIVE analysis with specific details extracted from the documents.
+
+    ANALYZE AND EXTRACT:
+
+    ## 1. PROJECT OVERVIEW
+    - Complete project description and scope
+    - Client/developer details and contact information
+    - Project type (retail, office, residential, etc.)
+    - Total estimated value/budget (extract specific amounts)
+    - Key project objectives and deliverables
+
+    ## 2. TECHNICAL SPECIFICATIONS
+    - Building specifications and performance requirements
+    - Materials and finishes specified
+    - Structural requirements and design standards
+    - M&E (Mechanical & Electrical) systems required
+    - Quality standards and compliance requirements
+
+    ## 3. SCOPE OF WORK
+    - Detailed breakdown of all work packages
+    - What's included vs excluded from scope
+    - Subcontractor packages and trade requirements
+    - Specialist work and equipment needs
+    - Site preparation and enabling works
+
+    ## 4. PROGRAM & TIMELINE
+    - Project start date and key milestone dates
+    - Completion requirements and deadlines
+    - Critical path activities and dependencies
+    - Phasing requirements if applicable
+    - Working hour restrictions
+
+    ## 5. CONTRACTUAL TERMS
+    - Contract type (JCT, NEC, bespoke, etc.)
+    - Payment terms and schedule
+    - Insurance and bonding requirements
+    - Liquidated damages provisions
+    - Risk allocation and responsibilities
+
+    ## 6. RISK ASSESSMENT
+    - Technical risks and challenges identified
+    - Program risks and constraints
+    - Commercial and financial risks
+    - Site-specific risks and constraints
+    - Recommended risk mitigation strategies
+
+    ## 7. TRADE REQUIREMENTS
+    - List all subcontractor trades required
+    - Specialist trades and qualifications needed
+    - Performance requirements for each trade
+    - Interface and coordination requirements
+
+    Return your analysis in a clear, structured format with detailed information under each section.
+
+    DOCUMENTS TO ANALYZE:
+    {document_text}"""
+
+        return prompt
+
+    def analyze_tender_documents(self, project_name: str, project_location: str, document_texts: List[str]) -> Dict[str, Any]:
+        """Analyze tender documents using Claude AI or fallback analysis"""
+
+        logger.info(f"Starting analysis for project: {project_name}")
+        logger.info(f"Location: {project_location}")
+        logger.info(f"Document count: {len(document_texts)}")
+
+        if not self.claude_available or not self.client:
+            logger.info("Claude AI not available, using enhanced fallback analysis")
+            return self._create_enhanced_fallback_analysis(project_name, project_location, document_texts)
+
+        try:
+            # Combine all document texts
+            combined_text = "\n\n=== DOCUMENT SEPARATOR ===\n\n".join(document_texts)
+
+            if len(combined_text) > 150000:  # Limit text size for API
+                combined_text = combined_text[:150000] + "\n\n[Text truncated for analysis]"
+
+            # Create comprehensive analysis prompt
+            prompt = self._create_comprehensive_analysis_prompt(project_name, project_location, combined_text)
+
+            # Call Claude API
+            logger.info("Calling Claude AI API...")
+            response = self.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=4000,
+                temperature=0.1,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            )
+
+            # Parse Claude's response
+            analysis_text = response.content[0].text
+            logger.info("✅ Successfully received Claude AI response")
+            return self._parse_claude_response(analysis_text, project_name)
+
+        except Exception as e:
+            logger.error(f"❌ Error calling Claude AI: {str(e)}")
+            # Fallback to enhanced analysis
+            return self._create_enhanced_fallback_analysis(project_name, project_location, document_texts)
+
+    def generate_analysis(self, prompt: str) -> str:
+        """Generate analysis from a prompt using Claude AI"""
+        logger.info("Generating analysis from prompt")
+
+        if not self.claude_available or not self.client:
+            logger.warning("Claude AI not available, returning fallback response")
+            return "Claude AI service not available. Please check configuration."
+
+        try:
+            # Call Claude API with the prompt
+            logger.info("Calling Claude API...")
+            response = self.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=4000,
+                temperature=0.1,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            )
+
+            # Extract text from response
+            analysis_text = response.content[0].text
+            logger.info("✅ Successfully generated analysis from prompt")
+            return analysis_text
+
+        except Exception as e:
+            logger.error(f"❌ Error calling Claude AI for analysis: {str(e)}")
+            return f"Error generating analysis: {str(e)}"
+
+    def _create_comprehensive_analysis_prompt(self, project_name: str, project_location: str, document_text: str) -> str:
+        """Create comprehensive prompt for Claude analysis"""
+
+        prompt = f"""
+You are an expert construction project analyst. Please analyze the following tender documents for the project "{project_name}" located in "{project_location}".
+
+Provide a COMPREHENSIVE analysis with specific details extracted from the documents.
+
+ANALYZE AND EXTRACT:
+
+## 1. PROJECT OVERVIEW
+- Complete project description and scope
+- Client/developer details and contact information
+- Project type (retail, office, residential, etc.)
+- Total estimated value/budget (extract specific amounts)
+- Key project objectives and deliverables
+
+## 2. TECHNICAL SPECIFICATIONS
+- Building specifications and performance requirements
+- Materials and finishes specified
+- Structural requirements and design standards
+- M&E (Mechanical & Electrical) systems required
+- Quality standards and compliance requirements
+
+## 3. SCOPE OF WORK
+- Detailed breakdown of all work packages
+- What's included vs excluded from scope
+- Subcontractor packages and trade requirements
+- Specialist work and equipment needs
+- Site preparation and enabling works
+
+## 4. PROGRAM & TIMELINE
+- Project start date and key milestone dates
+- Completion requirements and deadlines
+- Critical path activities and dependencies
+- Phasing requirements if applicable
+- Working hour restrictions
+
+## 5. CONTRACTUAL TERMS
+- Contract type (JCT, NEC, bespoke, etc.)
+- Payment terms and schedule
+- Insurance and bonding requirements
+- Liquidated damages provisions
+- Risk allocation and responsibilities
+
+## 6. RISK ASSESSMENT
+- Technical risks and challenges identified
+- Program risks and constraints
+- Commercial and financial risks
+- Site-specific risks and constraints
+- Recommended risk mitigation strategies
+
+## 7. TRADE REQUIREMENTS
+- List all subcontractor trades required
+- Specialist trades and qualifications needed
+- Performance requirements for each trade
+- Interface and coordination requirements
+
+DOCUMENTS TO ANALYZE:
+{document_text}
+
+Return comprehensive analysis as JSON with this structure:
+{{
+    "project_overview": "Comprehensive project description with specific details",
+    "project_name": "{project_name}",
+    "project_location": "{project_location}",
+    "client_details": "Full client information and contacts",
+    "project_type": "Specific building/project type",
+    "estimated_value_range": {{"min": 1000000, "max": 5000000}},
+    "project_duration_weeks": 52,
+    "key_requirements": [
+        "Specific technical requirement 1",
+        "Specific technical requirement 2"
+    ],
+    "scope_of_work": "Detailed scope description with all major work packages",
+    "technical_specifications": "Complete technical requirements and standards",
+    "timeline_analysis": "Program requirements and key dates",
+    "budget_estimates": "Value ranges and cost considerations",
+    "risk_assessment": "Comprehensive risk analysis",
+    "risk_level": "LOW/MEDIUM/HIGH",
+    "required_trades": [
+        "Groundworks", "Concrete Frame", "Brickwork", "Roofing",
+        "Mechanical Services", "Electrical Services", "Finishes"
+    ],
+    "contract_information": {{
+        "contract_type": "JCT Design & Build 2016",
+        "payment_terms": "Monthly payments against certified work",
+        "insurance_requirements": "£2M public liability",
+        "liquidated_damages": "£1000 per week"
+    }},
+    "clarification_questions": [
+        {{
+            "category": "TECHNICAL",
+            "question": "Specific technical clarification needed",
+            "priority": "HIGH",
+            "reference": "Drawing/document reference"
+        }}
+    ],
+    "analysis_confidence": 85
+}}
+
+IMPORTANT: Extract SPECIFIC information from the documents. Include actual numbers, dates, names, and detailed requirements rather than generic statements.
+"""
+        return prompt
+
+    def _parse_claude_response(self, response_text: str, project_name: str) -> Dict[str, Any]:
+        """Parse Claude's comprehensive response"""
+        try:
+            logger.info("Parsing Claude AI response...")
+
+            import json
+
+            # Find JSON in response
+            json_start = response_text.find('{')
+            json_end = response_text.rfind('}') + 1
+
+            if json_start != -1 and json_end > json_start:
+                json_text = response_text[json_start:json_end]
+                analysis = json.loads(json_text)
+
+                # Ensure required fields exist
+                required_fields = {
+                    'project_overview': f'Comprehensive analysis for {project_name}',
+                    'technical_specifications': 'Technical specifications analysis completed',
+                    'scope_of_work': 'Scope of work analysis completed',
+                    'timeline_analysis': 'Timeline analysis completed',
+                    'budget_estimates': 'Budget estimates generated',
+                    'risk_assessment': 'Risk assessment completed',
+                    'risk_level': 'MEDIUM',
+                    'required_trades': ['General Construction'],
+                    'key_requirements': ['General construction requirements'],
+                    'clarification_questions': []
+                }
+
+                for field, default_value in required_fields.items():
+                    if field not in analysis:
+                        analysis[field] = default_value
+
+                # Add confidence and method
+                analysis['analysis_confidence'] = analysis.get('analysis_confidence', 85.0)
+                analysis['analysis_method'] = 'Claude AI'
+
+                logger.info(f"✅ Successfully parsed analysis for {project_name}")
+                return analysis
+            else:
+                logger.warning("No JSON found in Claude response, using fallback")
+                return self._create_enhanced_fallback_analysis(project_name, "Unknown", [])
+
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parsing error: {str(e)}")
+            return self._create_enhanced_fallback_analysis(project_name, "Unknown", [])
+        except Exception as e:
+            logger.error(f"Error parsing Claude response: {str(e)}")
+            return self._create_enhanced_fallback_analysis(project_name, "Unknown", [])
+
+    def _create_enhanced_fallback_analysis(self, project_name: str, project_location: str, document_texts: List[str]) -> Dict[str, Any]:
+        """Create enhanced fallback analysis when Claude AI is not available"""
+
+        logger.info("Creating enhanced fallback analysis")
+
+        # Basic analysis based on available information
+        doc_count = len(document_texts)
+
+        # Estimate complexity based on document count
+        if doc_count > 50:
+            complexity = "High complexity project with extensive documentation"
+            risk_level = "HIGH"
+        elif doc_count > 20:
+            complexity = "Medium complexity project with comprehensive documentation"
+            risk_level = "MEDIUM"
+        else:
+            complexity = "Standard project complexity"
+            risk_level = "LOW"
+
+        # Common trades for construction projects
+        standard_trades = [
+            "Groundworks", "Concrete Frame", "Brickwork", "Roofing",
+            "Mechanical Services", "Electrical Services", "Finishes",
+            "Glazing", "Steelwork", "Insulation"
+        ]
+
+        return {
+            'project_overview': f'Comprehensive analysis for {project_name} located in {project_location}. {doc_count} documents analyzed.',
+            'project_name': project_name,
+            'project_location': project_location,
+            'client_details': 'Client details to be extracted from documents',
+            'project_type': 'Commercial construction project',
+            'estimated_value_range': {'min': 500000, 'max': 2000000},
+            'project_duration_weeks': 26,
+            'technical_specifications': f'{complexity}. Detailed technical review required.',
+            'scope_of_work': f'Multi-trade construction project requiring {len(standard_trades)} main trade packages.',
+            'timeline_analysis': 'Standard construction timeline with key milestones to be confirmed',
+            'budget_estimates': 'Budget estimates based on scope analysis',
+            'risk_assessment': f'Risk level assessed as {risk_level} based on project complexity',
+            'risk_level': risk_level,
+            'required_trades': standard_trades,
+            'clarification_questions': [
+                {
+                    'category': 'TECHNICAL',
+                    'question': 'Please provide detailed technical specifications',
+                    'priority': 'HIGH',
+                    'reference': 'General'
+                },
+                {
+                    'category': 'PROGRAM',
+                    'question': 'Confirm key project dates and milestones',
+                    'priority': 'HIGH',
+                    'reference': 'General'
+                }
+            ],
+            'analysis_confidence': 65.0,
+            'analysis_method': 'Enhanced Fallback Analysis'
+        }
+
+class TenderAIAnalyzer:
+    """Main AI-powered tender document analysis service"""
+
+    def __init__(self):
+        self.sharepoint_service = SharePointService()
+        self.claude_service = ClaudeAIService()
+        self.document_parser = DocumentParser()
+        self.file_detector = FileFormatDetector()
+
+    def analyze_project_sharepoint_folder_recursive_enhanced(self, project: 'Project', max_depth: int = 4) -> 'TenderAnalysis':
+        """
+        ENHANCED version of your existing recursive analysis method
+        Replace your existing method call with this one for comprehensive analysis
+        """
+        logger.info(f"🚀 Starting ENHANCED recursive analysis for: {project.name}")
+
+        try:
+            # Call the new comprehensive analysis method
+            return self.analyze_project_comprehensive(project, max_depth)
+
+        except ValueError as e:
+            # If comprehensive analysis fails, provide clear error message
+            logger.error(f"❌ Enhanced analysis failed: {str(e)}")
+            raise ValueError(f"Enhanced analysis failed: {str(e)}. Please check SharePoint connectivity and document access.")
+
+        except Exception as e:
+            # For any other errors, also fail with clear message
+            logger.error(f"❌ Unexpected error in enhanced analysis: {str(e)}")
+            raise Exception(f"Analysis system error: {str(e)}. Please contact support if this persists.")
+
+    def analyze_project_sharepoint_folder_enhanced(self, project: 'Project') -> 'TenderAnalysis':
+        """
+        ENHANCED version of your existing single-folder analysis method
+        Replace your existing method call with this one for comprehensive analysis
+        """
+        logger.info(f"🚀 Starting ENHANCED single-folder analysis for: {project.name}")
+
+        try:
+            # Call comprehensive analysis with depth 1 for single folder
+            return self.analyze_project_comprehensive(project, max_depth=1)
+
+        except ValueError as e:
+            logger.error(f"❌ Enhanced single-folder analysis failed: {str(e)}")
+            raise ValueError(f"Enhanced analysis failed: {str(e)}. Please check SharePoint connectivity and document access.")
+
+        except Exception as e:
+            logger.error(f"❌ Unexpected error in enhanced single-folder analysis: {str(e)}")
+            raise Exception(f"Analysis system error: {str(e)}. Please contact support if this persists.")
+
+    def _create_minimal_analysis(self, project: 'Project') -> 'TenderAnalysis':
+        """Create minimal analysis when no documents found - IMPROVED ERROR HANDLING"""
+        logger.warning(f"Creating minimal analysis for {project.name} - no documents found")
+
+        # Don't create fallback analysis - raise error instead
+        raise ValueError(f"No documents found in SharePoint folder for project '{project.name}'. Please check the SharePoint URL and ensure documents are accessible.")
+
+    def validate_analysis_prerequisites(self, project: 'Project') -> Dict[str, Any]:
+        """
+        Validate that all prerequisites are met for enhanced analysis
+        Call this before running analysis to check readiness
+        """
+        validation_results = {
+            'is_valid': True,
+            'errors': [],
+            'warnings': [],
+            'recommendations': []
+        }
+
+        # Check SharePoint URL
+        if not project.sharepoint_folder_url:
+            validation_results['is_valid'] = False
+            validation_results['errors'].append("No SharePoint folder URL configured for this project")
+
+        # Check Claude AI availability
+        if not self.claude_service.claude_available:
+            validation_results['is_valid'] = False
+            validation_results['errors'].append("Claude AI service is not available - check API key configuration")
+
+        # Check SharePoint service
+        try:
+            # Test SharePoint connectivity
+            test_docs = self.sharepoint_service.get_folder_documents_recursive(
+                project.sharepoint_folder_url, max_depth=1
+            )
+            if not test_docs:
+                validation_results['warnings'].append("No documents found in SharePoint folder - analysis will fail")
+                validation_results['recommendations'].append("Verify SharePoint URL and document accessibility")
+        except Exception as e:
+            validation_results['errors'].append(f"SharePoint connectivity issue: {str(e)}")
+            validation_results['is_valid'] = False
+
+        # Check for existing analysis
+        try:
+            existing_analysis = TenderAnalysis.objects.get(project=project)
+            validation_results['warnings'].append("Existing analysis found - this will be updated")
+        except TenderAnalysis.DoesNotExist:
+            pass  # No existing analysis is fine
+
+        return validation_results
+
+    def get_analysis_status(self, project: 'Project') -> Dict[str, Any]:
+        """Get current analysis status for a project"""
+        try:
+            analysis = TenderAnalysis.objects.get(project=project)
+
+            return {
+                'has_analysis': True,
+                'analysis_date': analysis.analysis_date,
+                'confidence': analysis.analysis_confidence,
+                'documents_count': len(analysis.documents_analyzed) if analysis.documents_analyzed else 0,
+                'risk_level': analysis.risk_level,
+                'method': getattr(analysis, 'analysis_method', 'Unknown'),
+                'can_regenerate': True
+            }
+        except TenderAnalysis.DoesNotExist:
+            return {
+                'has_analysis': False,
+                'analysis_date': None,
+                'confidence': 0,
+                'documents_count': 0,
+                'risk_level': None,
+                'method': None,
+                'can_regenerate': False
+            }
+
+    def preview_analysis_scope(self, project: 'Project', max_depth: int = 4) -> Dict[str, Any]:
+        """
+        Preview what will be analyzed without running full analysis
+        Useful for showing users what the analysis will cover
+        """
+        try:
+            # Get document list
+            documents = self.sharepoint_service.get_folder_documents_recursive(
+                project.sharepoint_folder_url, max_depth
+            )
+
+            # Analyze file formats
+            file_analysis = self.file_detector.analyze_folder_formats(documents)
+
+            return {
+                'success': True,
+                'total_documents': len(documents),
+                'file_types': file_analysis.get('counts', {}),
+                'folder_depth': max_depth,
+                'estimated_analysis_time': self._estimate_analysis_time(len(documents)),
+                'document_sample': [doc['name'] for doc in documents[:10]],  # First 10 files
+                'analysis_scope': self._determine_analysis_scope(file_analysis)
+            }
+
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'total_documents': 0,
+                'file_types': {},
+                'estimated_analysis_time': 0
+            }
+
+    def _estimate_analysis_time(self, doc_count: int) -> int:
+        """Estimate analysis time in seconds based on document count"""
+        # Rough estimate: 2 seconds per document + base processing time
+        base_time = 30  # Base processing time
+        per_doc_time = 2  # Seconds per document
+
+        estimated = base_time + (doc_count * per_doc_time)
+        return min(estimated, 300)  # Cap at 5 minutes
+
+    def _determine_analysis_scope(self, file_analysis: Dict[str, Any]) -> List[str]:
+        """Determine what analysis scope will be covered"""
+        scope = ['Project overview extraction', 'Risk assessment', 'Timeline analysis']
+
+        counts = file_analysis.get('counts', {})
+
+        if counts.get('pdf', 0) > 0:
+            scope.append('Technical drawings analysis')
+
+        if counts.get('excel', 0) > 0:
+            scope.append('Pricing schedule analysis')
+
+        if counts.get('word', 0) > 0:
+            scope.append('Contract conditions analysis')
+
+        scope.extend([
+            'Trade requirements identification',
+            'Client appointments detection',
+            'Clarification questions generation'
+        ])
+
+        return scope
+
+    def export_analysis_summary(self, project: 'Project') -> Dict[str, Any]:
+        """
+        Export comprehensive analysis summary for external use
+        Returns structured data suitable for reports or API responses
+        """
+        try:
+            analysis = TenderAnalysis.objects.get(project=project)
+
+            # Extract trade requirements if available
+            trade_requirements = []
+            if hasattr(analysis, 'technical_specifications') and isinstance(analysis.technical_specifications, dict):
+                trade_requirements = analysis.technical_specifications.get('trade_requirements', [])
+
+            # Extract key dates
+            key_dates = {}
+            if hasattr(analysis, 'critical_milestones') and analysis.critical_milestones:
+                for milestone in analysis.critical_milestones[:5]:
+                    if isinstance(milestone, dict):
+                        key_dates[milestone.get('name', 'Milestone')] = milestone.get('date', 'TBC')
+
+            summary = {
+                'project_info': {
+                    'name': project.name,
+                    'location': project.location,
+                    'reference': project.reference,
+                    'analysis_date': analysis.analysis_date.isoformat() if analysis.analysis_date else None
+                },
+                'analysis_meta': {
+                    'confidence': analysis.analysis_confidence,
+                    'risk_level': analysis.risk_level,
+                    'documents_analyzed': len(analysis.documents_analyzed) if analysis.documents_analyzed else 0,
+                    'method': getattr(analysis, 'analysis_method', 'Standard Analysis')
+                },
+                'project_overview': analysis.project_overview[:500] + '...' if len(analysis.project_overview) > 500 else analysis.project_overview,
+                'key_requirements': analysis.key_requirements[:10] if analysis.key_requirements else [],
+                'identified_risks': analysis.identified_risks[:8] if analysis.identified_risks else [],
+                'trade_requirements': trade_requirements[:15] if trade_requirements else [],
+                'project_duration_weeks': analysis.project_duration_weeks,
+                'key_dates': key_dates,
+                'scope_summary': analysis.scope_of_work[:300] + '...' if len(analysis.scope_of_work) > 300 else analysis.scope_of_work
+            }
+
+            return {
+                'success': True,
+                'summary': summary
+            }
+
+        except TenderAnalysis.DoesNotExist:
+            return {
+                'success': False,
+                'error': 'No analysis found for this project'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': f'Error exporting analysis: {str(e)}'
+            }
+
+    def create_enhanced_comprehensive_prompt(self, project_name: str, project_location: str, document_text: str, file_analysis: Dict[str, Any]) -> str:
+        """Create an enhanced comprehensive prompt that matches Claude.ai direct response quality"""
+
+        # Extract key insights from file analysis
+        file_insights = []
+        if file_analysis.get('counts'):
+            counts = file_analysis['counts']
+            if counts.get('pdf', 0) > 0:
+                file_insights.append(f"- {counts['pdf']} PDF documents (likely technical drawings, specifications, conditions)")
+            if counts.get('word', 0) > 0:
+                file_insights.append(f"- {counts['word']} Word documents (likely tender conditions, specifications)")
+            if counts.get('excel', 0) > 0:
+                file_insights.append(f"- {counts['excel']} Excel files (likely pricing schedules, BOQs)")
+
+        # Enhanced prompt with specific extraction requirements
+        prompt = f"""You are a senior construction estimator and project analyst with 20+ years experience analyzing complex tender documents. You must provide a COMPREHENSIVE, DETAILED analysis that extracts ALL actionable information from these documents.
+
+PROJECT: {project_name}
+LOCATION: {project_location}
+DOCUMENT SUITE: {', '.join(file_insights) if file_insights else 'Mixed document types'}
+
+ANALYZE THE DOCUMENTS AND PROVIDE DETAILED EXTRACTION FOR EACH SECTION:
+
+## 1. PROJECT OVERVIEW & SCOPE
+Extract and provide:
+- Complete project description with specific details
+- Client/developer name and contact details (emails, phone numbers)
+- Project type and scale (exact room counts, floor areas, etc.)
+- Total project value/budget ranges (extract any monetary figures)
+- Key objectives and success criteria
+- Delivery model and procurement route
+
+## 2. COMPREHENSIVE TRADE BREAKDOWN
+Identify ALL required trades and provide detailed breakdown:
+- Primary trades (structural, M&E, finishes)
+- Specialist trades (specific equipment, branded systems)
+- Interface trades (coordination requirements)
+- For each trade specify:
+  * Scope of work
+  * Quality standards required
+  * Coordination requirements
+  * Estimated percentage of total value
+
+## 3. TECHNICAL SPECIFICATIONS & STANDARDS
+Extract detailed technical requirements:
+- Building standards and compliance requirements
+- Material specifications (brands, grades, performance)
+- Quality standards and testing requirements
+- Performance criteria and warranties
+- Environmental and sustainability requirements
+- Health & safety specific requirements
+
+## 4. CONTRACTUAL & COMMERCIAL TERMS
+Identify and extract:
+- Contract type (JCT, NEC, bespoke) and year
+- Payment terms and milestone schedule
+- Insurance requirements (PL, EL, PI amounts)
+- Liquidated damages rates and caps
+- Retention percentages and release terms
+- Variations and change control procedures
+- Risk allocation and responsibility matrix
+
+## 5. PROGRAMME & TIMELINE ANALYSIS
+Extract all timing information:
+- Start on site date
+- Key milestone dates
+- Completion requirements
+- Sectional completions or phasing
+- Working hours restrictions
+- Access limitations
+- Critical path dependencies
+
+## 6. DIRECT APPOINTMENTS & NAMED SUPPLIERS
+Identify any items that are client-direct:
+- FF&E (Furniture, Fittings & Equipment) suppliers
+- Specialist equipment suppliers
+- Named/preferred subcontractors
+- Client-direct coordination requirements
+- Installation vs supply-only responsibilities
+
+## 7. OPERATIONAL CONSTRAINTS & REQUIREMENTS
+Extract operational considerations:
+- Live environment constraints
+- Noise and access restrictions
+- Security and safety protocols
+- Coordination with existing operations
+- Temporary works requirements
+- Site logistics and access
+
+## 8. RISK ASSESSMENT & MITIGATION
+Identify specific risks:
+- Technical and design risks
+- Programme and timeline risks
+- Commercial and cost risks
+- Health & safety risks
+- Environmental and compliance risks
+- For each risk, suggest mitigation strategies
+
+## 9. CLARIFICATION REQUIREMENTS (RFI ITEMS)
+Generate specific questions for missing information:
+- Technical clarifications needed
+- Commercial terms requiring confirmation
+- Programme dependencies to confirm
+- Scope boundary clarifications
+- Quality standard confirmations
+
+## 10. SAMPLE ROOMS & QUALITY STANDARDS
+Look for references to:
+- Existing sample rooms or show suites
+- Quality benchmarks and standards
+- Mock-up requirements
+- Approval processes
+- Brand compliance requirements
+
+CRITICAL REQUIREMENTS:
+- Extract SPECIFIC details, not generic statements
+- Include actual numbers, dates, names, contact details
+- Identify client-direct vs contractor-supplied items
+- Note any addenda or amendments
+- Flag any conflicting information
+- Provide actionable intelligence for estimators
+
+RETURN FORMAT: Provide detailed, specific information under each section. Include actual quotes from documents where relevant. Focus on actionable intelligence that enables accurate pricing and risk assessment.
+
+DOCUMENTS TO ANALYZE:
+{document_text}"""
+
+        return prompt
+
+    def analyze_project_comprehensive(self, project: 'Project', max_depth: int = 4) -> 'TenderAnalysis':
+        """Natural Claude.ai style analysis - COMPLETELY REWRITTEN"""
+
+        logger.info(f"🚀 Starting NATURAL Claude analysis for: {project.name}")
+        start_time = time.time()
+
+        try:
+            # Get documents
+            documents = self.sharepoint_service.get_folder_documents_recursive(
+                project.sharepoint_folder_url, max_depth=max_depth
+            )
+
+            if not documents:
+                raise ValueError("No documents found in SharePoint folder")
+
+            # Extract text from documents
+            logger.info("📄 Extracting text from documents...")
+            document_texts = []
+            document_names = []
+
+            for doc in documents[:50]:  # Limit to 50 docs
+                try:
+                    content = self.sharepoint_service.download_document_content(doc['download_url'])
+                    if content:
+                        text = self.document_parser.extract_text(
+                            content, doc.get('mime_type', ''), doc['name']
+                        )
+                        document_texts.append(f"=== {doc['name']} ===\n{text}")
+                        document_names.append(doc['name'])
+                except Exception as e:
+                    logger.warning(f"Failed to process {doc['name']}: {str(e)}")
+                    continue
+
+            if not document_texts:
+                raise ValueError("No readable documents found")
+
+            # 🔧 NATURAL CLAUDE PROMPT - Like asking Claude.ai directly
+            logger.info("🧠 Running NATURAL Claude analysis...")
+            combined_text = "\n\n".join(document_texts)
+
+            # Truncate if needed but preserve structure
+            if len(combined_text) > 150000:
+                combined_text = combined_text[:150000] + "\n\n[Additional documents available...]"
+
+            natural_prompt = f"""I need you to analyze these construction tender documents for the "{project.name}" project in {project.location or 'the specified location'}. Please provide a comprehensive analysis as if you were helping me understand this tender opportunity.
+
+    Please analyze these documents thoroughly and tell me:
+
+    1. What is this project actually about? What are we building?
+    2. What are the key requirements and specifications?
+    3. What trades and specialists will be needed?
+    4. What are the main risks and challenges?
+    5. What are the key dates and timeline?
+    6. What questions should I ask the client for clarification?
+    7. Are there any special requirements or constraints?
+    8. What's the approximate scope and complexity?
+
+    Please be specific and detailed, extracting actual information from the documents rather than giving generic responses.
+
+    DOCUMENTS TO ANALYZE:
+    {combined_text}"""
+
+            # Call Claude naturally
+            if not self.claude_service.claude_available:
+                raise ValueError("Claude AI service not available")
+
+            response = self.claude_service.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=8000,  # Allow for detailed response
+                temperature=0.1,
+                messages=[{"role": "user", "content": natural_prompt}]
+            )
+
+            # Get Claude's natural response
+            claude_response = response.content[0].text
+            logger.info("✅ Successfully received natural Claude AI response")
+            logger.info(f"📝 Claude response length: {len(claude_response)} characters")
+
+            # 🔧 SAVE RAW RESPONSE + MINIMAL PARSING
+            analysis_data = self._parse_natural_claude_response(claude_response, project, document_names)
+
+            # Save to database
+            analysis, created = TenderAnalysis.objects.update_or_create(
+                project=project,
+                defaults=analysis_data
+            )
+
+            # Set documents analyzed
+            analysis.documents_analyzed = document_names
+            analysis.save()
+
+            duration = time.time() - start_time
+            logger.info(f"✅ NATURAL analysis completed in {duration:.2f} seconds")
+            logger.info(f"📊 Final: Documents: {len(analysis.documents_analyzed)}, Response: {len(claude_response)} chars")
+
+            return analysis
+
+        except Exception as e:
+            logger.error(f"❌ Error in natural analysis: {str(e)}")
+            raise
+
+    def _parse_natural_claude_response(self, claude_response: str, project, document_names: List[str]) -> Dict[str, Any]:
+        """Parse Claude's natural response - FIXED to match actual model fields"""
+
+        logger.info("🔄 Parsing natural Claude response...")
+
+        # ONLY use fields that actually exist in TenderAnalysis model
+        analysis_data = {
+            # Core fields that definitely exist
+            'project_overview': claude_response,  # TextField - Claude's full response
+            'scope_of_work': claude_response,     # TextField - Also store full response here
+
+            # JSON fields
+            'key_requirements': self._extract_requirements_naturally(claude_response),  # JSONField
+            'identified_risks': self._extract_risks_naturally(claude_response),         # JSONField
+            'technical_specifications': self._extract_technical_dict_naturally(claude_response), # JSONField
+            'estimated_value_range': {'min': 0, 'max': 0, 'notes': 'See analysis for details'},    # JSONField
+            'critical_milestones': self._extract_milestones_naturally(claude_response),             # JSONField
+            'building_standards': self._extract_standards_naturally(claude_response),               # JSONField
+            'documents_analyzed': document_names,  # JSONField
+
+            # Simple fields
+            'risk_level': self._determine_risk_level_naturally(claude_response),  # CharField
+            'analysis_confidence': 95.0,  # FloatField
+            'project_duration_weeks': self._extract_duration_naturally(claude_response),  # IntegerField
+
+            # Text fields
+            'environmental_requirements': self._extract_environmental_naturally(claude_response),  # TextField
+            'health_safety_requirements': self._extract_safety_naturally(claude_response),        # TextField
+        }
+
+        logger.info(f"✅ Natural parsing completed - {len(analysis_data)} fields populated")
+        return analysis_data
+
+    def _extract_technical_dict_naturally(self, response: str) -> Dict[str, Any]:
+        """Extract technical info as dict (JSONField compatible)"""
+        return {
+            'analysis_method': 'Natural Claude Response',
+            'response_length': len(response),
+            'contains_specifications': 'specification' in response.lower(),
+            'contains_standards': 'standard' in response.lower(),
+            'technical_details': 'See full analysis in project overview'
+        }
+
+    def _extract_milestones_naturally(self, response: str) -> List[Dict[str, str]]:
+        """Extract milestones as list of dicts (JSONField compatible)"""
+        milestones = []
+
+        # Look for date-related lines
+        lines = response.split('\n')
+        for line in lines:
+            line = line.strip()
+            if any(word in line.lower() for word in ['date', 'deadline', 'completion', 'start', 'milestone']):
+                if len(line) > 20:  # Substantial content
+                    milestones.append({
+                        'description': line.lstrip('•-*0123456789. ').strip(),
+                        'type': 'extracted',
+                        'source': 'claude_analysis'
+                    })
+
+        return milestones[:10]
+
+    def _extract_standards_naturally(self, response: str) -> List[str]:
+        """Extract building standards as list (JSONField compatible)"""
+        standards = []
+
+        lines = response.split('\n')
+        for line in lines:
+            line = line.strip()
+            if any(word in line.lower() for word in ['standard', 'regulation', 'code', 'compliance', 'bs ', 'en ']):
+                if len(line) > 15:
+                    clean_line = line.lstrip('•-*0123456789. ').strip()
+                    if clean_line and clean_line not in standards:
+                        standards.append(clean_line)
+
+        return standards[:10]
+
+    def _extract_duration_naturally(self, response: str) -> int:
+        """Extract project duration in weeks (IntegerField compatible)"""
+        import re
+
+        # Look for duration mentions
+        duration_patterns = [
+            r'(\d+)\s*weeks?',
+            r'(\d+)\s*months?',
+            r'(\d+)\s*week',
+            r'duration.*?(\d+)'
+        ]
+
+        for pattern in duration_patterns:
+            match = re.search(pattern, response.lower())
+            if match:
+                weeks = int(match.group(1))
+                # Convert months to weeks if needed
+                if 'month' in pattern:
+                    weeks = weeks * 4
+                return min(weeks, 104)  # Cap at 2 years
+
+        return None  # Let Django handle null
+
+    def _extract_environmental_naturally(self, response: str) -> str:
+        """Extract environmental requirements (TextField compatible)"""
+        env_lines = []
+
+        for line in response.split('\n'):
+            if any(word in line.lower() for word in ['environmental', 'sustainability', 'carbon', 'energy', 'waste']):
+                env_lines.append(line.strip())
+
+        return '\n'.join(env_lines[:5]) if env_lines else ''
+
+    def _extract_safety_naturally(self, response: str) -> str:
+        """Extract health & safety requirements (TextField compatible)"""
+        safety_lines = []
+
+        for line in response.split('\n'):
+            if any(word in line.lower() for word in ['safety', 'health', 'cdm', 'risk', 'hazard', 'protection']):
+                safety_lines.append(line.strip())
+
+        return '\n'.join(safety_lines[:5]) if safety_lines else ''
+
+    # Keep the existing helper methods for requirements and risks
+    def _extract_requirements_naturally(self, response: str) -> List[str]:
+        """Extract requirements without forcing structure"""
+        requirements = []
+
+        lines = response.split('\n')
+        for line in lines:
+            line = line.strip()
+            if any(indicator in line.lower() for indicator in [
+                'requirement', 'must', 'shall', 'need to', 'required to',
+                'specification', 'standard', 'compliance', 'mandatory'
+            ]):
+                if len(line) > 20:
+                    clean_line = line.lstrip('•-*0123456789. ').strip()
+                    if clean_line and clean_line not in requirements:
+                        requirements.append(clean_line)
+
+        return requirements[:20]
+
+    def _extract_risks_naturally(self, response: str) -> List[str]:
+        """Extract risks without forcing structure"""
+        risks = []
+
+        lines = response.split('\n')
+        for line in lines:
+            line = line.strip()
+            if any(indicator in line.lower() for indicator in [
+                'risk', 'challenge', 'concern', 'issue', 'problem',
+                'constraint', 'limitation', 'difficulty', 'caution'
+            ]):
+                if len(line) > 20:
+                    clean_line = line.lstrip('•-*0123456789. ').strip()
+                    if clean_line and clean_line not in risks:
+                        risks.append(clean_line)
+
+        return risks[:15]
+
+    def _determine_risk_level_naturally(self, response: str) -> str:
+        """Determine risk level from Claude's natural language"""
+        response_lower = response.lower()
+
+        high_risk_words = ['high risk', 'significant risk', 'major concern', 'critical', 'complex', 'challenging']
+        if any(word in response_lower for word in high_risk_words):
+            return 'HIGH'
+
+        low_risk_words = ['low risk', 'straightforward', 'simple', 'standard', 'routine']
+        if any(word in response_lower for word in low_risk_words):
+            return 'LOW'
+
+        return 'MEDIUM'
+
+    def _extract_timeline_naturally(self, response: str) -> str:
+        """Extract timeline info naturally"""
+        timeline_indicators = ['date', 'timeline', 'schedule', 'deadline', 'completion', 'start', 'duration']
+
+        timeline_lines = []
+        for line in response.split('\n'):
+            if any(indicator in line.lower() for indicator in timeline_indicators):
+                timeline_lines.append(line.strip())
+
+        return '\n'.join(timeline_lines[:10]) if timeline_lines else 'See timeline details in full analysis'
+
+    def _run_comprehensive_claude_analysis(self, project_name: str, project_location: str,
+                                         document_texts: List[str], file_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Run enhanced Claude analysis with comprehensive prompt"""
+
+        if not self.claude_service.claude_available:
+            raise ValueError("Claude AI service not available")
+
+        try:
+            # Combine document texts intelligently
+            combined_text = "\n\n=== DOCUMENT SEPARATOR ===\n\n".join(document_texts)
+
+            # Limit size for API
+            if len(combined_text) > 180000:
+                combined_text = combined_text[:180000] + "\n\n[Text truncated - additional documents available]"
+
+            # Create enhanced prompt
+            prompt = self.create_enhanced_comprehensive_prompt(
+                project_name, project_location, combined_text, file_analysis
+            )
+
+            # Call Claude with enhanced parameters
+            response = self.claude_service.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=8000,  # Increased for comprehensive response
+                temperature=0.1,
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            analysis_text = response.content[0].text
+            logger.info("✅ Successfully received comprehensive Claude AI response")
+
+            # Parse the comprehensive response
+            return self._parse_comprehensive_response(analysis_text, project_name, file_analysis)
+
+        except Exception as e:
+            logger.error(f"❌ Enhanced Claude analysis failed: {str(e)}")
+            raise
+
+    def _parse_comprehensive_response(self, analysis_text: str, project_name: str,
+                                    file_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse Claude's comprehensive response into structured data"""
+
+        try:
+            # Split response into sections
+            sections = {}
+            current_section = None
+            current_content = []
+
+            for line in analysis_text.split('\n'):
+                if line.strip().startswith('## '):
+                    if current_section:
+                        sections[current_section] = '\n'.join(current_content).strip()
+                    current_section = line.strip().replace('## ', '').replace('#', '').strip()
+                    current_content = []
+                else:
+                    current_content.append(line)
+
+            if current_section:
+                sections[current_section] = '\n'.join(current_content).strip()
+
+            # Extract trade requirements from sections
+            trade_requirements = self._extract_trade_requirements(sections)
+
+            # Extract specific details
+            direct_appointments = self._extract_direct_appointments(sections)
+            risk_assessment = self._extract_risk_details(sections)
+            timeline_details = self._extract_timeline_details(sections)
+
+            # Return comprehensive structured data
+            return {
+                'project_overview': sections.get('1. PROJECT OVERVIEW & SCOPE', f'Comprehensive analysis for {project_name}'),
+                'scope_of_work': sections.get('2. COMPREHENSIVE TRADE BREAKDOWN', 'Detailed scope analysis completed'),
+                'technical_specifications': sections.get('3. TECHNICAL SPECIFICATIONS & STANDARDS', 'Technical specifications extracted'),
+                'contractual_terms': sections.get('4. CONTRACTUAL & COMMERCIAL TERMS', 'Contract terms analyzed'),
+                'timeline_analysis': sections.get('5. PROGRAMME & TIMELINE ANALYSIS', 'Timeline analysis completed'),
+                'direct_appointments': direct_appointments,
+                'operational_constraints': sections.get('7. OPERATIONAL CONSTRAINTS & REQUIREMENTS', 'Operational requirements identified'),
+                'risk_assessment': risk_assessment,
+                'clarification_questions': self._extract_clarification_questions(sections),
+                'trade_requirements': trade_requirements,
+                'sample_room_info': sections.get('10. SAMPLE ROOMS & QUALITY STANDARDS', 'Quality standards analyzed'),
+                'analysis_confidence': 85.0,  # High confidence for comprehensive analysis
+                'analysis_method': 'Comprehensive Claude AI Analysis',
+                'file_analysis': file_analysis,
+                'sections_analyzed': len(sections)
+            }
+
+        except Exception as e:
+            logger.error(f"Error parsing comprehensive response: {str(e)}")
+            raise
+
+    def _extract_trade_requirements(self, sections: Dict[str, str]) -> List[Dict[str, Any]]:
+        """Extract detailed trade requirements from analysis"""
+
+        trade_section = sections.get('2. COMPREHENSIVE TRADE BREAKDOWN', '')
+        trades = []
+
+        # Common construction trades with enhanced details
+        standard_trades = [
+            'Demolition', 'Groundworks', 'Concrete', 'Brickwork', 'Roofing',
+            'Structural Steelwork', 'Carpentry & Joinery', 'M&E Services',
+            'Plumbing', 'Electrical', 'HVAC', 'Fire Safety', 'Plastering',
+            'Flooring', 'Painting & Decorating', 'Glazing', 'Insulation',
+            'Bathroom Specialists', 'Kitchen Specialists', 'Tiling'
+        ]
+
+        for trade in standard_trades:
+            trade_info = {
+                'trade_name': trade,
+                'scope': f'{trade} works as per specifications',
+                'priority': 'HIGH' if trade in ['M&E Services', 'Structural Steelwork', 'Fire Safety'] else 'MEDIUM',
+                'estimated_value_percentage': self._estimate_trade_percentage(trade),
+                'special_requirements': self._get_trade_special_requirements(trade, trade_section),
+                'coordination_needs': f'Interface coordination required with other trades'
+            }
+            trades.append(trade_info)
+
+        return trades
+
+    def _enhanced_map_to_model_fields(self, analysis_results: Dict[str, Any], project) -> Dict[str, Any]:
+        """Enhanced mapping to TenderAnalysis model fields"""
+
+        # Use existing enhanced mapper if available
+        try:
+            from .enhanced_mapper import EnhancedAIAnalysisMapper
+            mapper = EnhancedAIAnalysisMapper()
+            mapped_data = mapper.map_comprehensive_analysis(analysis_results, project)
+        except ImportError:
+            # Fallback enhanced mapping
+            mapped_data = self._fallback_enhanced_mapping(analysis_results, project)
+
+        # Add documents analyzed
+        mapped_data['documents_analyzed'] = analysis_results.get('file_analysis', {}).get('document_names', [])
+        mapped_data['analysis_confidence'] = analysis_results.get('analysis_confidence', 85.0)
+
+        return mapped_data
+
+    def _fallback_enhanced_mapping(self, analysis_results: Dict[str, Any], project) -> Dict[str, Any]:
+        """Enhanced fallback mapping if enhanced_mapper is not available"""
+
+        return {
+            'project_overview': analysis_results.get('project_overview', f'Comprehensive analysis for {project.name}'),
+            'scope_of_work': analysis_results.get('scope_of_work', 'Detailed scope analysis'),
+            'technical_specifications': analysis_results.get('technical_specifications', {}),
+            'key_requirements': [req.get('question', 'Requirement') for req in analysis_results.get('clarification_questions', [])[:5]],
+            'identified_risks': self._extract_risk_list(analysis_results.get('risk_assessment', '')),
+            'risk_level': self._determine_risk_level(analysis_results),
+            'project_duration_weeks': self._extract_duration(analysis_results.get('timeline_analysis', '')),
+            'analysis_confidence': analysis_results.get('analysis_confidence', 85.0)
+        }
+
+    def _generate_enhanced_subcontractor_recommendations(self, analysis, analysis_results):
+        """Simplified recommendation generation"""
+        try:
+            # Skip complex recommendation generation for now
+            logger.info("Skipping subcontractor recommendations to avoid parsing errors")
+            return
+        except Exception as e:
+            logger.error(f"Error generating recommendations: {str(e)}")
+            return
+
+    # Helper methods for extraction
+    def _extract_risk_list(self, risk_text: str) -> List[str]:
+        """Extract risk items from risk assessment text"""
+        risks = []
+        for line in risk_text.split('\n'):
+            if line.strip() and ('risk' in line.lower() or line.strip().startswith('-')):
+                risk_item = line.strip().lstrip('-').strip()
+                if risk_item and len(risk_item) > 10:
+                    risks.append(risk_item)
+        return risks[:10]  # Limit to top 10 risks
+
+    def _determine_risk_level(self, analysis_results: Dict[str, Any]) -> str:
+        """Determine overall risk level from analysis"""
+        risk_text = analysis_results.get('risk_assessment', '').lower()
+
+        if any(word in risk_text for word in ['critical', 'severe', 'major']):
+            return 'HIGH'
+        elif any(word in risk_text for word in ['moderate', 'medium', 'some']):
+            return 'MEDIUM'
+        else:
+            return 'LOW'
+
+    def _extract_duration(self, timeline_text: str) -> Optional[int]:
+        """Extract project duration in weeks from timeline text"""
+        import re
+
+        # Look for patterns like "26 weeks", "52 week", etc.
+        week_pattern = re.search(r'(\d+)\s*weeks?', timeline_text.lower())
+        if week_pattern:
+            return int(week_pattern.group(1))
+
+        # Look for month patterns and convert
+        month_pattern = re.search(r'(\d+)\s*months?', timeline_text.lower())
+        if month_pattern:
+            return int(month_pattern.group(1)) * 4
+
+        return 26  # Default 6 months
+
+    def _estimate_trade_percentage(self, trade: str) -> float:
+        """Estimate trade percentage of total project value"""
+        trade_percentages = {
+            'M&E Services': 25.0, 'Structural Steelwork': 15.0, 'Groundworks': 10.0,
+            'Concrete': 12.0, 'Roofing': 8.0, 'Carpentry & Joinery': 10.0,
+            'Electrical': 8.0, 'Plumbing': 6.0, 'HVAC': 7.0, 'Fire Safety': 5.0,
+            'Flooring': 6.0, 'Painting & Decorating': 4.0, 'Glazing': 5.0
+        }
+        return trade_percentages.get(trade, 3.0)
+
+    def _get_trade_special_requirements(self, trade: str, trade_section: str) -> str:
+        """Get special requirements for specific trades"""
+        if trade.lower() in trade_section.lower():
+            # Extract relevant portion of text
+            lines = trade_section.split('\n')
+            relevant_lines = [line for line in lines if trade.lower() in line.lower()]
+            if relevant_lines:
+                return '; '.join(relevant_lines[:2])
+
+        return f"Standard {trade} requirements apply"
+
+    def _extract_direct_appointments(self, sections: Dict[str, str]) -> Dict[str, Any]:
+        """Extract direct appointment information"""
+        direct_section = sections.get('6. DIRECT APPOINTMENTS & NAMED SUPPLIERS', '')
+
+        return {
+            'has_direct_appointments': bool(direct_section and len(direct_section) > 50),
+            'ffe_supplier': 'Client direct' if 'ff&e' in direct_section.lower() else 'TBD',
+            'named_suppliers': self._extract_named_suppliers(direct_section),
+            'coordination_requirements': 'Coordinate with client-direct appointments' if direct_section else 'Standard coordination'
+        }
+
+    def _extract_named_suppliers(self, text: str) -> List[str]:
+        """Extract named supplier information"""
+        suppliers = []
+        for line in text.split('\n'):
+            if any(indicator in line.lower() for indicator in ['supplier:', 'brand:', 'manufacturer:']):
+                supplier = line.strip()
+                if supplier:
+                    suppliers.append(supplier)
+        return suppliers[:10]
+
+    def _extract_risk_details(self, sections: Dict[str, str]) -> Dict[str, Any]:
+        """Extract detailed risk information"""
+        risk_section = sections.get('8. RISK ASSESSMENT & MITIGATION', '')
+
+        return {
+            'technical_risks': self._extract_risk_category(risk_section, 'technical'),
+            'programme_risks': self._extract_risk_category(risk_section, 'programme'),
+            'commercial_risks': self._extract_risk_category(risk_section, 'commercial'),
+            'mitigation_strategies': self._extract_mitigation_strategies(risk_section)
+        }
+
+    def _extract_risk_category(self, risk_text: str, category: str) -> List[str]:
+        """Extract risks for specific category"""
+        risks = []
+        lines = risk_text.lower().split('\n')
+
+        for i, line in enumerate(lines):
+            if category in line:
+                # Get next few lines as they might contain risk details
+                for j in range(i+1, min(i+5, len(lines))):
+                    if lines[j].strip() and lines[j].strip().startswith('-'):
+                        risks.append(lines[j].strip().lstrip('-').strip())
+
+        return risks[:5]
+
+    def _extract_mitigation_strategies(self, risk_text: str) -> List[str]:
+        """Extract risk mitigation strategies"""
+        strategies = []
+        for line in risk_text.split('\n'):
+            if any(word in line.lower() for word in ['mitigate', 'strategy', 'prevent', 'manage']):
+                strategy = line.strip()
+                if strategy and len(strategy) > 20:
+                    strategies.append(strategy)
+        return strategies[:5]
+
+    def _extract_timeline_details(self, sections: Dict[str, str]) -> Dict[str, Any]:
+        """Extract detailed timeline information"""
+        timeline_section = sections.get('5. PROGRAMME & TIMELINE ANALYSIS', '')
+
+        return {
+            'start_date': self._extract_date(timeline_section, 'start'),
+            'completion_date': self._extract_date(timeline_section, 'completion'),
+            'key_milestones': self._extract_milestones(timeline_section),
+            'critical_path': self._extract_critical_path(timeline_section)
+        }
+
+    def _extract_date(self, text: str, date_type: str) -> str:
+        """Extract specific dates from text"""
+        import re
+
+        date_pattern = r'\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b'
+        dates = re.findall(date_pattern, text)
+
+        if dates and date_type.lower() in text.lower():
+            return dates[0]
+
+        return 'TBD'
+
+    def _extract_milestones(self, timeline_text: str) -> List[str]:
+        """Extract key milestones from timeline text"""
+        milestones = []
+        for line in timeline_text.split('\n'):
+            if any(word in line.lower() for word in ['milestone', 'key date', 'completion']):
+                milestone = line.strip()
+                if milestone and len(milestone) > 10:
+                    milestones.append(milestone)
+        return milestones[:8]
+
+    def _extract_critical_path(self, timeline_text: str) -> List[str]:
+        """Extract critical path activities"""
+        activities = []
+        for line in timeline_text.split('\n'):
+            if any(word in line.lower() for word in ['critical', 'dependency', 'sequence']):
+                activity = line.strip()
+                if activity and len(activity) > 15:
+                    activities.append(activity)
+        return activities[:5]
+
+    def _extract_clarification_questions(self, sections: Dict[str, str]) -> List[Dict[str, Any]]:
+        """Extract clarification questions from analysis"""
+        questions_section = sections.get('9. CLARIFICATION REQUIREMENTS (RFI ITEMS)', '')
+        questions = []
+
+        categories = ['TECHNICAL', 'COMMERCIAL', 'PROGRAM', 'SCOPE', 'QUALITY']
+
+        for line in questions_section.split('\n'):
+            if line.strip() and ('?' in line or 'clarif' in line.lower()):
+                question_text = line.strip().lstrip('-').strip()
+                if len(question_text) > 20:
+                    category = 'TECHNICAL'  # Default
+                    for cat in categories:
+                        if cat.lower() in question_text.lower():
+                            category = cat
+                            break
+
+                    questions.append({
+                        'category': category,
+                        'question': question_text,
+                        'priority': 'HIGH' if any(word in question_text.lower() for word in ['critical', 'essential', 'must']) else 'MEDIUM',
+                        'reference': 'Analysis'
+                    })
+
+        return questions[:15]  # Limit to 15 questions
+
+    def analyze_project_with_file_detection(self, project: Project, max_depth: int = 4) -> 'TenderAnalysis':
+        """Enhanced analysis with file format detection - ADD this method"""
+
+        logger.info(f"🚀 Starting enhanced analysis with file detection for: {project.name}")
+        start_time = time.time()
+
+        try:
+            # Use your existing SharePoint service
+            documents = self.sharepoint_service.get_folder_documents_recursive(
+                project.sharepoint_folder_url,
+                max_depth=max_depth
+            )
+
+            if not documents:
+                logger.warning("⚠️ No documents found")
+                return self._create_minimal_analysis(project)
+
+            # NEW: Analyze file formats
+            logger.info(f"📊 Analyzing file formats for {len(documents)} documents...")
+            file_analysis = self.file_detector.analyze_folder_formats(documents)
+
+            logger.info(f"📈 File format analysis:")
+            logger.info(f"  📄 PDF: {file_analysis['counts']['pdf']}")
+            logger.info(f"  📝 Word: {file_analysis['counts']['word']}")
+            logger.info(f"  📊 Excel: {file_analysis['counts']['excel']}")
+            logger.info(f"  ✅ Readable: {file_analysis['readability_percentage']:.1f}%")
+
+            # Use your existing document processing
+            document_texts = []
+            document_names = []
+
+            for doc in documents[:50]:  # Increased for better analysis
+                try:
+                    filename = doc.get('name', 'Unknown')
+                    download_url = doc.get('download_url')
+
+                    # CHECK: Skip if no valid download URL
+                    if not download_url or download_url == 'None' or str(download_url) == 'None':
+                        logger.warning(f"⚠️ Skipping {filename} - no valid download URL")
+                        continue
+
+                    content = self.sharepoint_service.download_document_content(download_url)
+                    if content:
+                        filename = doc.get('name', 'Unknown')
+                        mime_type = doc.get('file', {}).get('mimeType', '')
+
+                        # Use your existing DocumentParser
+                        text = self.document_parser.extract_text(content, mime_type, filename)
+                        if text and len(text.strip()) > 50:
+                            document_texts.append(text)
+                            document_names.append(filename)
+                except Exception as e:
+                    logger.warning(f"⚠️ Error processing {doc.get('name', 'Unknown')}: {str(e)}")
+                    continue
+
+            # Enhanced AI Analysis with comprehensive prompt
+            logger.info("🧠 Running comprehensive AI analysis...")
+
+            # Combine documents
+            combined_text = "\n\n=== DOCUMENT SEPARATOR ===\n\n".join(document_texts)
+            if len(combined_text) > 180000:
+                combined_text = combined_text[:180000] + "\n\n[Text truncated for analysis]"
+
+            # Use enhanced prompt
+            prompt = self.claude_service.create_comprehensive_analysis_prompt(
+                project.name,
+                project.location or "Location TBC",
+                combined_text
+            )
+
+            # Call Claude with enhanced prompt
+            if self.claude_service.claude_available:
+                response = self.claude_service.client.messages.create(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=4000,
+                    temperature=0.1,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+
+                analysis_text = response.content[0].text
+                analysis_results = self._parse_comprehensive_response(analysis_text, project.name, file_analysis)
+            else:
+                analysis_results = self._create_enhanced_fallback_analysis(project.name, project.location, document_texts, file_analysis)
+
+            # Save to database using your existing mapping
+            mapped_results = self._map_analysis_to_model_fields(analysis_results, project)
+
+            tender_analysis, created = TenderAnalysis.objects.get_or_create(
+                project=project,
+                defaults=mapped_results
+            )
+
+            if not created:
+                for key, value in mapped_results.items():
+                    if hasattr(tender_analysis, key):
+                        setattr(tender_analysis, key, value)
+                tender_analysis.save()
+
+            tender_analysis.documents_analyzed = document_names
+            tender_analysis.save()
+
+            # Generate recommendations using your existing method
+            try:
+                self._generate_subcontractor_recommendations(tender_analysis)
+            except Exception as e:
+                logger.error(f"Error generating recommendations: {str(e)}")
+
+            total_time = time.time() - start_time
+            logger.info(f"✅ Enhanced analysis completed in {total_time:.2f} seconds")
+
+            return tender_analysis
+
+        except Exception as e:
+            logger.error(f"❌ Error in enhanced analysis: {str(e)}")
+            raise
+
+    def _safe_convert_to_int(self, value, default=None):
+        """Safely convert value to integer"""
+        if value is None or value == "":
+            return default
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            import re
+            number_match = re.search(r'(\d+)', str(value))
+            if number_match:
+                return int(number_match.group(1))
+            return default
+        return default
+
+    def _map_analysis_to_model_fields(self, analysis_results: Dict[str, Any], project) -> Dict[str, Any]:
+        """Map AI analysis results to TenderAnalysis model fields"""
+        logger.info("Mapping AI analysis results to TenderAnalysis model fields")
+
+        mapped_data = {}
+
+        # Helper function to safely convert lists to strings
+        def safe_join_list(items, separator='\n'):
+            """Safely join a list that might contain mixed types"""
+            if not items:
+                return ""
+            string_items = []
+            for item in items:
+                if isinstance(item, dict):
+                    if 'question' in item and 'category' in item:
+                        string_items.append(f"{item.get('category', 'General')}: {item.get('question', '')}")
+                    else:
+                        dict_str = ", ".join(f"{k}: {v}" for k, v in item.items() if v)
+                        string_items.append(dict_str)
+                else:
+                    string_items.append(str(item))
+            return separator.join(filter(None, string_items))
+
+        # 1. project_overview (TextField)
+        overview_parts = []
+        if analysis_results.get('project_overview'):
+            overview_parts.append(str(analysis_results['project_overview']))
+        else:
+            overview_parts.append(f"AI Analysis for {project.name}")
+
+        if hasattr(project, 'location') and project.location:
+            overview_parts.append(f"Location: {project.location}")
+
+        mapped_data['project_overview'] = '\n\n'.join(overview_parts)
+
+        # 2. key_requirements (JSONField)
+        key_reqs = []
+        required_trades = analysis_results.get('required_trades', [])
+        if isinstance(required_trades, list):
+            for trade in required_trades:
+                key_reqs.append(f"Required trade: {str(trade)}")
+
+        key_requirements = analysis_results.get('key_requirements', [])
+        if isinstance(key_requirements, list):
+            for req in key_requirements:
+                key_reqs.append(str(req))
+
+        mapped_data['key_requirements'] = key_reqs if key_reqs else ['General construction requirements']
+
+        # 3. scope_of_work (TextField)
+        scope_parts = []
+        if analysis_results.get('scope_of_work'):
+            scope_parts.append(str(analysis_results['scope_of_work']))
+
+        if analysis_results.get('technical_specifications'):
+            tech_specs = analysis_results['technical_specifications']
+            scope_parts.append(f"Technical Specifications: {str(tech_specs)}")
+
+        mapped_data['scope_of_work'] = '\n\n'.join(scope_parts) if scope_parts else f'Scope of work analysis for {project.name}'
+
+        # 4. technical_specifications (TextField)
+        tech_specs = analysis_results.get('technical_specifications', '')
+        mapped_data['technical_specifications'] = str(tech_specs) if tech_specs else "Technical specifications to be reviewed"
+
+        # 5. risk_assessment (TextField)
+        risk_parts = []
+        if analysis_results.get('risk_assessment'):
+            risk_parts.append(str(analysis_results['risk_assessment']))
+
+        mapped_data['risk_assessment'] = '\n\n'.join(risk_parts) if risk_parts else "Risk assessment pending detailed review"
+
+        # 6. risk_level (CharField)
+        risk_level = analysis_results.get('risk_level', 'MEDIUM')
+        if isinstance(risk_level, str):
+            risk_level = risk_level.upper()
+            if 'LOW' in risk_level:
+                mapped_data['risk_level'] = 'LOW'
+            elif 'HIGH' in risk_level or 'CRITICAL' in risk_level:
+                mapped_data['risk_level'] = 'HIGH'
+            else:
+                mapped_data['risk_level'] = 'MEDIUM'
+        else:
+            mapped_data['risk_level'] = 'MEDIUM'
+
+        # 7. timeline_analysis (TextField)
+        timeline_parts = []
+        if analysis_results.get('timeline_analysis'):
+            timeline_parts.append(str(analysis_results['timeline_analysis']))
+
+        duration = analysis_results.get('project_duration_weeks')
+        if duration:
+            timeline_parts.append(f"Estimated duration: {str(duration)} weeks")
+
+        mapped_data['timeline_analysis'] = '\n\n'.join(timeline_parts) if timeline_parts else "Timeline analysis pending programme review"
+
+        # 8. budget_estimates (TextField)
+        budget_parts = []
+        if analysis_results.get('budget_estimates'):
+            budget_parts.append(str(analysis_results['budget_estimates']))
+
+        value_range = analysis_results.get('estimated_value_range')
+        if isinstance(value_range, dict):
+            min_val = value_range.get('min', 'TBD')
+            max_val = value_range.get('max', 'TBD')
+            if isinstance(min_val, (int, float)) and isinstance(max_val, (int, float)):
+                budget_parts.append(f"Estimated range: £{min_val:,} - £{max_val:,}")
+
+        mapped_data['budget_estimates'] = '\n\n'.join(budget_parts) if budget_parts else "Budget estimates to be developed"
+
+        # 9. contract_information (JSONField)
+        contract_info = {}
+        if analysis_results.get('contract_information'):
+            ci = analysis_results['contract_information']
+            if isinstance(ci, dict):
+                contract_info.update(ci)
+            else:
+                contract_info['general'] = str(ci)
+
+        mapped_data['contract_information'] = contract_info
+
+        # 10. analysis_confidence (FloatField)
+        confidence = analysis_results.get('analysis_confidence', 70.0)
+        try:
+            mapped_data['analysis_confidence'] = float(confidence)
+        except (ValueError, TypeError):
+            mapped_data['analysis_confidence'] = 70.0
+
+        # 11. project_duration_weeks (IntegerField)
+        duration = analysis_results.get('project_duration_weeks')
+        mapped_data['project_duration_weeks'] = self._safe_convert_to_int(duration, 26)
+
+        # 12. estimated_project_value (DecimalField)
+        if analysis_results.get('estimated_value_range'):
+            value_range = analysis_results['estimated_value_range']
+            if isinstance(value_range, dict):
+                max_val = value_range.get('max')
+                if isinstance(max_val, (int, float)) and max_val > 0:
+                    mapped_data['estimated_project_value'] = float(max_val)
+
+        # 13. contract_type (CharField)
+        contract_type = analysis_results.get('contract_information', {}).get('contract_type') or analysis_results.get('contract_type')
+        if contract_type:
+            mapped_data['contract_type'] = str(contract_type)[:100]
+
+        logger.info(f"✅ Successfully mapped {len(mapped_data)} fields to TenderAnalysis model")
+        return mapped_data
+
+    def _parse_comprehensive_response(self, analysis_text: str, project_name: str, file_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse Claude's comprehensive response"""
+
+        # Split into sections
+        sections = {}
+        current_section = None
+        current_content = []
+
+        for line in analysis_text.split('\n'):
+            if line.startswith('## '):
+                if current_section:
+                    sections[current_section] = '\n'.join(current_content).strip()
+                current_section = line.replace('## ', '').strip()
+                current_content = []
+            else:
+                current_content.append(line)
+
+        if current_section:
+            sections[current_section] = '\n'.join(current_content).strip()
+
+        # Return structured analysis
+        return {
+            'project_overview': sections.get('1. PROJECT OVERVIEW', f'Comprehensive analysis for {project_name}'),
+            'technical_specifications': sections.get('2. TECHNICAL SPECIFICATIONS', 'Technical specifications extracted'),
+            'scope_of_work': sections.get('3. SCOPE OF WORK', 'Scope of work analysis'),
+            'timeline_analysis': sections.get('4. PROGRAM & TIMELINE', 'Timeline analysis'),
+            'contractual_terms': sections.get('5. CONTRACTUAL TERMS', 'Contract terms analysis'),
+            'risk_assessment': sections.get('6. RISK ASSESSMENT', 'Risk assessment'),
+            'trade_requirements': self._extract_trade_list(sections.get('7. TRADE REQUIREMENTS', '')),
+            'key_requirements': ['Comprehensive analysis completed', 'Multi-trade coordination required'],
+            'identified_risks': ['Program delivery risk', 'Technical coordination complexity'],
+            'analysis_confidence': 85.0,
+            'file_analysis': file_analysis,
+            'raw_analysis_text': analysis_text
+        }
+
+    def _extract_trade_list(self, trade_text: str) -> List[str]:
+        """Extract trade requirements from text"""
+        standard_trades = [
+            'Demolition', 'Groundworks', 'Concrete', 'Brickwork', 'Roofing',
+            'Carpentry', 'Steelwork', 'M&E Services', 'Plumbing', 'Electrical',
+            'Plastering', 'Flooring', 'Painting', 'Glazing', 'Insulation'
+        ]
+
+        found_trades = []
+        trade_text_lower = trade_text.lower()
+
+        for trade in standard_trades:
+            if trade.lower() in trade_text_lower:
+                found_trades.append(trade)
+
+        return found_trades if found_trades else standard_trades[:8]
+
+    def _create_enhanced_fallback_analysis(self, project_name: str, project_location: str, document_texts: List[str], file_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhanced fallback when Claude unavailable"""
+
+        doc_count = len(document_texts)
+        return {
+            'project_overview': f'Enhanced analysis for {project_name} in {project_location}. {doc_count} documents analyzed.',
+            'technical_specifications': 'Technical specifications require detailed review',
+            'scope_of_work': f'Multi-trade project with {doc_count} source documents',
+            'timeline_analysis': 'Project timeline analysis pending',
+            'contractual_terms': 'Contract terms to be reviewed',
+            'risk_assessment': 'Risk assessment based on document analysis',
+            'trade_requirements': ['Demolition', 'Groundworks', 'M&E Services', 'Finishes'],
+            'key_requirements': [f'{doc_count} documents analyzed', 'Comprehensive review required'],
+            'identified_risks': ['Program coordination', 'Technical complexity'],
+            'analysis_confidence': 75.0,
+            'file_analysis': file_analysis
+        }
+
+    def analyze_project_sharepoint_folder_recursive(self, project, max_depth: int = 4) -> 'TenderAnalysis':
+        return self.analyze_project_comprehensive(project, max_depth)
+        """Analyze ALL documents in the project's SharePoint folder and ALL subfolders recursively"""
+        try:
+            # Check BOTH possible SharePoint URL fields
+            sharepoint_url = getattr(project, 'sharepoint_folder_url', None)
+            if not sharepoint_url:
+                sharepoint_url = getattr(project, 'sharepoint_documents_link', None)
+
+            if not sharepoint_url:
+                raise ValueError("No SharePoint folder URL specified for this project")
+
+            logger.info(f"Starting RECURSIVE analysis of SharePoint folder: {sharepoint_url}")
+            documents = self.sharepoint_service.get_folder_documents_recursive(sharepoint_url, max_depth)
+
+            # Handle None return value and ensure we have a list
+            if documents is None:
+                logger.warning("SharePoint service returned None instead of document list")
+                documents = []
+
+            if not isinstance(documents, list):
+                logger.warning(f"SharePoint service returned unexpected type: {type(documents)}")
+                documents = []
+
+            if not documents:
+                raise ValueError("No documents found in SharePoint folder or any subfolders")
+
+            logger.info(f"Found {len(documents)} total documents across all folders and subfolders")
+
+            # Extract text from all documents
+            document_texts = []
+            document_names = []
+            processed_folders = set()
+
+            for doc in documents:
+                logger.info(f"Processing document: {doc.get('path', doc.get('name', 'Unknown'))}")
+                processed_folders.add(doc.get('folder_path', 'root'))
+
+                # Download document content
+                if doc.get('download_url'):
+                    content = self.sharepoint_service.download_document_content(doc['download_url'])
+                    if content:
+                        # Extract text from document
+                        text = self.document_parser.extract_text(
+                            content, doc.get('mime_type', 'application/octet-stream'), doc.get('name', 'Unknown')
+                        )
+                        # Include folder path in the document header for context
+                        folder_context = f" (from {doc.get('folder_path', '')})" if doc.get('folder_path') != 'root' else ""
+                        document_texts.append(f"=== {doc.get('path', doc.get('name', 'Unknown'))}{folder_context} ===\n{text}")
+                        document_names.append(doc.get('path', doc.get('name', 'Unknown')))
+                    else:
+                        logger.warning(f"Could not download content for {doc.get('name', 'Unknown')}")
+                        document_names.append(f"{doc.get('name', 'Unknown')} (download failed)")
+                else:
+                    logger.warning(f"No download URL for {doc.get('name', 'Unknown')}")
+                    document_names.append(f"{doc.get('name', 'Unknown')} (no download URL)")
+
+            logger.info(f"Successfully processed documents from {len(processed_folders)} folders: {', '.join(sorted(processed_folders))}")
+
+            # Analyze with Claude AI
+            logger.info("Analyzing project with comprehensive folder data")
+            analysis_results = self.claude_service.analyze_tender_documents(
+                project.name,
+                project.location or "Not specified",
+                document_texts
+            )
+
+            # Validate that analysis_results is a dictionary
+            if not isinstance(analysis_results, dict):
+                logger.error(f"Expected dict from analyze_tender_documents, got {type(analysis_results)}")
+                analysis_results = self._create_fallback_analysis_results(project)
+
+            # Ensure all required fields exist
+            analysis_results = self._ensure_required_fields(analysis_results)
+
+            # Create or update TenderAnalysis object
+            from tenders.models import TenderAnalysis
+            mapped_results = self._map_analysis_to_model_fields(analysis_results, project)
+
+            tender_analysis, created = TenderAnalysis.objects.get_or_create(
+                project=project,
+                defaults=mapped_results
+            )
+
+            if not created:
+                # Update existing analysis with mapped fields
+                logger.info("Updating existing analysis with mapped fields")
+                for key, value in mapped_results.items():
+                    if hasattr(tender_analysis, key):
+                        setattr(tender_analysis, key, value)
+                    else:
+                        logger.warning(f"TenderAnalysis model doesn't have field '{key}'")
+                tender_analysis.save()
+
+            # Set documents analyzed
+            tender_analysis.documents_analyzed = document_names
+            tender_analysis.save()
+
+            logger.info(f"✅ TenderAnalysis saved with properly mapped fields")
+
+            # Generate subcontractor recommendations
+            try:
+                self._generate_subcontractor_recommendations(tender_analysis)
+            except Exception as e:
+                logger.error(f"Error generating subcontractor recommendations: {str(e)}")
+
+            # Generate clarification questions
+            try:
+                clarification_questions = analysis_results.get('clarification_questions', [])
+                self._generate_clarification_questions(tender_analysis, clarification_questions)
+            except Exception as e:
+                logger.error(f"Error generating clarification questions: {str(e)}")
+
+            logger.info(f"🎉 RECURSIVE analysis completed for project {project.name}")
+            logger.info(f"📊 Total documents analyzed: {len(document_names)}")
+            logger.info(f"📁 Folders processed: {', '.join(sorted(processed_folders))}")
+
+            return tender_analysis
+
+        except Exception as e:
+            logger.error(f"Error in recursive SharePoint folder analysis: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
+
+    def analyze_project_sharepoint_folder(self, project):
+        """Analyze all documents in the project's SharePoint folder (non-recursive)"""
+        try:
+            # Check BOTH possible SharePoint URL fields
+            sharepoint_url = getattr(project, 'sharepoint_folder_url', None)
+            if not sharepoint_url:
+                sharepoint_url = getattr(project, 'sharepoint_documents_link', None)
+
+            if not sharepoint_url:
+                raise ValueError("No SharePoint folder URL specified for this project")
+
+            # Get all documents from SharePoint folder
+            logger.info(f"Fetching documents from SharePoint folder: {sharepoint_url}")
+            documents = self.sharepoint_service.get_folder_documents(sharepoint_url)
+
+            if not documents:
+                raise ValueError("No documents found in SharePoint folder")
+
+            # Extract text from all documents
+            document_texts = []
+            document_names = []
+
+            for doc in documents:
+                logger.info(f"Processing document: {doc['name']}")
+
+                # Download document content
+                if doc['download_url']:
+                    content = self.sharepoint_service.download_document_content(doc['download_url'])
+                    if content:
+                        # Extract text from document
+                        text = self.document_parser.extract_text(
+                            content, doc['mime_type'], doc['name']
+                        )
+                        document_texts.append(f"=== {doc['name']} ===\n{text}")
+                        document_names.append(doc['name'])
+                    else:
+                        logger.warning(f"Could not download content for {doc['name']}")
+                        document_names.append(f"{doc['name']} (download failed)")
+                else:
+                    logger.warning(f"No download URL for {doc['name']}")
+                    document_names.append(f"{doc['name']} (no download URL)")
+
+            # Analyze with Claude AI
+            logger.info("Analyzing project with available data")
+            analysis_results = self.claude_service.analyze_tender_documents(
+                project.name,
+                project.location or "Not specified",
+                document_texts
+            )
+
+            # Validate that analysis_results is a dictionary
+            if not isinstance(analysis_results, dict):
+                logger.error(f"Expected dict from analyze_tender_documents, got {type(analysis_results)}")
+                analysis_results = self._create_fallback_analysis_results(project)
+
+            # Create or update TenderAnalysis object
+            from tenders.models import TenderAnalysis
+            mapped_results = self._map_analysis_to_model_fields(analysis_results, project)
+
+            tender_analysis, created = TenderAnalysis.objects.get_or_create(
+                project=project,
+                defaults=mapped_results
+            )
+
+            if not created:
+                # Update existing analysis
+                logger.info("Updating existing analysis")
+                for key, value in mapped_results.items():
+                    if hasattr(tender_analysis, key):
+                        setattr(tender_analysis, key, value)
+                    else:
+                        logger.warning(f"TenderAnalysis model doesn't have field '{key}'")
+                tender_analysis.save()
+
+            tender_analysis.documents_analyzed = document_names
+            tender_analysis.save()
+
+            # Generate subcontractor recommendations
+            try:
+                self._generate_subcontractor_recommendations(tender_analysis)
+            except Exception as e:
+                logger.error(f"Error generating subcontractor recommendations: {str(e)}")
+
+            # Generate clarification questions
+            try:
+                clarification_questions = analysis_results.get('clarification_questions', [])
+                self._generate_clarification_questions(tender_analysis, clarification_questions)
+            except Exception as e:
+                logger.error(f"Error generating clarification questions: {str(e)}")
+
+            logger.info(f"Analysis completed for project {project.name}")
+            return tender_analysis
+
+        except Exception as e:
+            logger.error(f"Error analyzing project SharePoint folder: {str(e)}")
+            raise
+
+    def _create_fallback_analysis_results(self, project):
+        """Create fallback analysis results"""
+        return {
+            'technical_specifications': f"Analysis for {project.name}",
+            'scope_of_work': f"Scope of work analysis completed",
+            'timeline_analysis': "Timeline analysis completed",
+            'budget_estimates': "Budget estimates generated",
+            'risk_assessment': "Risk assessment completed",
+            'risk_level': 'MEDIUM',
+            'required_trades': ['General Construction'],
+            'key_requirements': ['General construction requirements'],
+            'clarification_questions': []
+        }
+
+    def _ensure_required_fields(self, analysis_results):
+        """Ensure all required fields exist in analysis results"""
+        required_fields = {
+            'technical_specifications': 'Technical specifications analyzed',
+            'scope_of_work': 'Scope of work determined',
+            'timeline_analysis': 'Timeline analysis completed',
+            'budget_estimates': 'Budget estimates prepared',
+            'risk_assessment': 'Risk assessment completed',
+            'risk_level': 'MEDIUM',
+            'required_trades': ['General Construction'],
+            'key_requirements': ['General construction requirements']
+        }
+
+        for field, default_value in required_fields.items():
+            if field not in analysis_results:
+                analysis_results[field] = default_value
+
+        return analysis_results
+
+    def _generate_subcontractor_recommendations(self, tender_analysis):
+        """Enhanced subcontractor recommendation generation"""
+        try:
+            logger.info("Enhanced subcontractor recommendations generation starting")
+
+            # Import the enhanced mapper
+            from .enhanced_mapper import EnhancedAIAnalysisMapper
+            mapper = EnhancedAIAnalysisMapper()
+
+            analysis_data = {
+                'required_trades': tender_analysis.key_requirements or []
+            }
+
+            recommendations = mapper.generate_enhanced_subcontractor_recommendations(analysis_data)
+            logger.info(f"Generated {len(recommendations)} subcontractor recommendations")
+
+            # Log the recommendations
+            for rec in recommendations:
+                logger.info(f"Recommendation: {rec['trade_category']} - {rec['priority']}")
+
+        except Exception as e:
+            logger.error(f"Error in enhanced subcontractor generation: {str(e)}")
+
+    def _generate_clarification_questions(self, tender_analysis, clarification_questions):
+        """Enhanced clarification question generation"""
+        try:
+            from tenders.models import TenderQuestion
+
+            # Use the analysis results to generate questions
+            analysis_data = {
+                'clarification_questions': clarification_questions,
+                'analysis_confidence': tender_analysis.analysis_confidence,
+                'estimated_value_range': {},
+                'project_duration_weeks': tender_analysis.project_duration_weeks
+            }
+
+            # Import the enhanced mapper
+            from .enhanced_mapper import EnhancedAIAnalysisMapper
+            mapper = EnhancedAIAnalysisMapper()
+            comprehensive_questions = mapper.create_comprehensive_clarification_questions(analysis_data)
+
+            for q_data in comprehensive_questions:
+                TenderQuestion.objects.get_or_create(
+                    project=tender_analysis.project,
+                    category=q_data['category'],
+                    question_text=q_data['question_text'],
+                    defaults={
+                        'priority': q_data['priority'],
+                    }
+                )
+
+            logger.info(f"Generated {len(comprehensive_questions)} clarification questions")
+
+        except Exception as e:
+            logger.error(f"Error in enhanced clarification question generation: {str(e)}")

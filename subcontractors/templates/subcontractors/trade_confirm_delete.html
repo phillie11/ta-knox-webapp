@@ -1,0 +1,92 @@
+{% extends 'base.html' %}
+
+{% block title %}Delete Trade Category - {{ object.name }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+  <div class="row justify-content-center">
+    <div class="col-md-8">
+      <div class="card">
+        <div class="card-header bg-danger text-white">
+          <h4 class="mb-0">Confirm Deletion</h4>
+        </div>
+        <div class="card-body">
+          <div class="alert alert-warning">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            <strong>Warning:</strong> This action cannot be undone.
+          </div>
+          
+          <p class="lead">Are you sure you want to delete the trade category "{{ object.name }}"?</p>
+          
+          <div class="card mb-4">
+            <div class="card-body">
+              <h5 class="card-title">Trade Category Details</h5>
+              <p><strong>Name:</strong> {{ object.name }}</p>
+              <p><strong>Description:</strong> {{ object.description|default:"No description provided" }}</p>
+              <p><strong>Associated Subcontractors:</strong> 
+                <span class="badge bg-info">{{ object.subcontractors.count }} subcontractor{{ object.subcontractors.count|pluralize }}</span>
+              </p>
+            </div>
+          </div>
+
+          {% if object.subcontractors.exists %}
+          <div class="alert alert-danger">
+            <h6><i class="bi bi-exclamation-triangle-fill me-2"></i>Cannot Delete</h6>
+            <p class="mb-0">
+              This trade category cannot be deleted because it has {{ object.subcontractors.count }} associated subcontractor{{ object.subcontractors.count|pluralize }}.
+              You must first reassign these subcontractors to other trade categories or delete them.
+            </p>
+            
+            <div class="mt-3">
+              <h6>Associated Subcontractors:</h6>
+              <ul class="list-unstyled">
+                {% for subcontractor in object.subcontractors.all|slice:":10" %}
+                  <li>
+                    <i class="bi bi-person-fill text-primary me-2"></i>
+                    <a href="{% url 'subcontractors:detail' subcontractor.id %}">{{ subcontractor.company }}</a>
+                  </li>
+                {% endfor %}
+                {% if object.subcontractors.count > 10 %}
+                  <li class="text-muted">... and {{ object.subcontractors.count|add:"-10" }} more</li>
+                {% endif %}
+              </ul>
+            </div>
+          </div>
+
+          <div class="d-flex justify-content-between">
+            <a href="{% url 'subcontractors:trade_list' %}" class="btn btn-secondary">
+              <i class="bi bi-arrow-left"></i> Back to Trade List
+            </a>
+            <a href="{% url 'subcontractors:list' %}?trade={{ object.id }}" class="btn btn-primary">
+              <i class="bi bi-people"></i> Manage Subcontractors in this Trade
+            </a>
+          </div>
+
+          {% else %}
+          <!-- Trade can be safely deleted -->
+          <div class="alert alert-info">
+            <p class="mb-0">
+              <i class="bi bi-info-circle me-2"></i>
+              This trade category has no associated subcontractors and can be safely deleted.
+            </p>
+          </div>
+
+          <form method="post">
+            {% csrf_token %}
+            <div class="d-flex justify-content-between">
+              <a href="{% url 'subcontractors:trade_list' %}" class="btn btn-secondary">
+                <i class="bi bi-arrow-left"></i> Cancel
+              </a>
+              <button type="submit" class="btn btn-danger">
+                <i class="bi bi-trash"></i> Delete Trade Category
+              </button>
+            </div>
+          </form>
+          {% endif %}
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

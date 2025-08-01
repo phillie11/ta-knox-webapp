@@ -1,0 +1,103 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}{{ reminder_title }} - {{ project.name }}{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header bg-warning">
+                    <h5 class="mb-0">
+                        <i class="bi bi-bell"></i> {{ reminder_title }}
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <h6>Project: {{ project.name }}</h6>
+                    <p class="text-muted">{{ reminder_description }}</p>
+                    
+                    <!-- Daily limit information -->
+                    {% if already_sent_today > 0 %}
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle"></i>
+                            <strong>Daily Limit Applied:</strong> {{ already_sent_today }} subcontractor(s) already received this reminder type today.
+                        </div>
+                    {% endif %}
+                    
+                    {% if can_send_today %}
+                        <div class="alert alert-success">
+                            <strong>{{ invitations.count }}</strong> reminder(s) will be sent to:
+                        </div>
+                        
+                        <div class="table-responsive mb-3">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Company</th>
+                                        <th>Trade</th>
+                                        <th>Status</th>
+                                        <th>Last Reminder</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for invitation in invitations %}
+                                    <tr>
+                                        <td>{{ invitation.subcontractor.company }}</td>
+                                        <td>{{ invitation.subcontractor.trade.name }}</td>
+                                        <td>
+                                            <span class="badge bg-{% if invitation.status == 'PENDING' %}warning{% elif invitation.status == 'ACCEPTED' %}success{% endif %}">
+                                                {{ invitation.get_status_display }}
+                                            </span>
+                                        </td>
+                                        <td>
+                                            {% if reminder_type == 'pending' %}
+                                                {% if invitation.last_pending_reminder %}
+                                                    {{ invitation.last_pending_reminder|date:"d/m/Y" }}
+                                                {% else %}
+                                                    Never
+                                                {% endif %}
+                                            {% else %}
+                                                {% if invitation.last_will_tender_reminder %}
+                                                    {{ invitation.last_will_tender_reminder|date:"d/m/Y" }}
+                                                {% else %}
+                                                    Never
+                                                {% endif %}
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <form method="post">
+                            {% csrf_token %}
+                            <input type="hidden" name="type" value="{{ reminder_type }}">
+                            
+                            <div class="d-flex justify-content-between">
+                                <a href="{% url 'tenders:tracking' project.id %}" class="btn btn-secondary">
+                                    <i class="bi bi-arrow-left"></i> Cancel
+                                </a>
+                                <button type="submit" class="btn btn-warning">
+                                    <i class="bi bi-bell"></i> Send {{ invitations.count }} Reminder(s)
+                                </button>
+                            </div>
+                        </form>
+                        
+                    {% else %}
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle"></i>
+                            No {{ reminder_type }} reminders to send today. All eligible subcontractors have already received this reminder type today.
+                        </div>
+                        
+                        <a href="{% url 'tenders:tracking' project.id %}" class="btn btn-secondary">
+                            <i class="bi bi-arrow-left"></i> Back to Tracking
+                        </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,155 @@
+{% extends 'base.html' %}
+{% load crispy_forms_tags %}
+
+{% block title %}
+  {% if object %}
+    Edit Trade Category - {{ object.name }}
+  {% else %}
+    Add New Trade Category
+  {% endif %}
+  - CRM System
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+  <div class="row justify-content-center">
+    <div class="col-md-8">
+      <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>
+          {% if object %}
+            Edit Trade Category
+          {% else %}
+            Add New Trade Category
+          {% endif %}
+        </h1>
+        <a href="{% url 'subcontractors:trade_list' %}" class="btn btn-outline-secondary">
+          <i class="bi bi-arrow-left"></i> Back to Trade List
+        </a>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0">
+            {% if object %}
+              Edit "{{ object.name }}"
+            {% else %}
+              Trade Category Details
+            {% endif %}
+          </h5>
+        </div>
+        <div class="card-body">
+          <form method="post">
+            {% csrf_token %}
+            
+            <div class="mb-3">
+              {{ form.name|as_crispy_field }}
+            </div>
+            
+            <div class="mb-3">
+              {{ form.description|as_crispy_field }}
+            </div>
+
+            {% if object %}
+            <!-- Show existing subcontractors for this trade -->
+            <div class="mb-3">
+              <label class="form-label">Current Subcontractors in this Trade</label>
+              <div class="border rounded p-3">
+                {% if object.subcontractors.exists %}
+                  <div class="row">
+                    {% for subcontractor in object.subcontractors.all %}
+                      <div class="col-md-6 mb-2">
+                        <div class="d-flex align-items-center">
+                          <i class="bi bi-person-fill text-primary me-2"></i>
+                          <span>{{ subcontractor.company }}</span>
+                        </div>
+                      </div>
+                    {% endfor %}
+                  </div>
+                  <div class="mt-2">
+                    <small class="text-muted">
+                      Total: {{ object.subcontractors.count }} subcontractor{{ object.subcontractors.count|pluralize }}
+                    </small>
+                  </div>
+                {% else %}
+                  <div class="text-muted fst-italic">
+                    <i class="bi bi-info-circle me-2"></i>
+                    No subcontractors assigned to this trade category yet.
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+            {% endif %}
+
+            <div class="d-flex justify-content-between">
+              <a href="{% url 'subcontractors:trade_list' %}" class="btn btn-secondary">
+                <i class="bi bi-x"></i> Cancel
+              </a>
+              <button type="submit" class="btn btn-primary">
+                <i class="bi bi-save"></i>
+                {% if object %}
+                  Update Trade Category
+                {% else %}
+                  Create Trade Category
+                {% endif %}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      {% if object %}
+      <!-- Warning about deleting trades with subcontractors -->
+      {% if object.subcontractors.exists %}
+      <div class="card mt-4 border-warning">
+        <div class="card-header bg-warning text-dark">
+          <h6 class="mb-0">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            Important Note
+          </h6>
+        </div>
+        <div class="card-body">
+          <p class="mb-0">
+            This trade category has {{ object.subcontractors.count }} associated subcontractor{{ object.subcontractors.count|pluralize }}.
+            If you delete this trade category, you'll need to assign those subcontractors to a different trade first.
+          </p>
+        </div>
+      </div>
+      {% endif %}
+      {% endif %}
+
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Add character counter for description field
+    const descriptionField = document.getElementById('id_description');
+    if (descriptionField) {
+        const maxLength = 500; // Adjust as needed
+        const counter = document.createElement('div');
+        counter.className = 'form-text text-muted';
+        counter.style.textAlign = 'right';
+        
+        function updateCounter() {
+            const remaining = maxLength - descriptionField.value.length;
+            counter.textContent = `${descriptionField.value.length}/${maxLength} characters`;
+            
+            if (remaining < 50) {
+                counter.className = 'form-text text-warning';
+            } else if (remaining < 0) {
+                counter.className = 'form-text text-danger';
+            } else {
+                counter.className = 'form-text text-muted';
+            }
+        }
+        
+        descriptionField.parentNode.appendChild(counter);
+        descriptionField.addEventListener('input', updateCounter);
+        updateCounter(); // Initial count
+    }
+});
+</script>
+{% endblock %}

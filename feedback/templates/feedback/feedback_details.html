@@ -1,0 +1,233 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Feedback Details - {{ feedback.subcontractor.company }} - CRM System{% endblock %}
+
+{% block extra_css %}
+<style>
+.comparison-table th,
+.comparison-table td {
+    padding: 8px;
+    border: 1px solid #dee2e6;
+}
+.comparison-table th {
+    background-color: #f8f9fa;
+    font-weight: bold;
+}
+.preview-frame {
+    width: 100%;
+    height: 600px;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <!-- Header with back button -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>Feedback Details</h1>
+        <a href="{% url 'feedback:feedback_list' %}" class="btn btn-outline-secondary">
+            <i class="bi bi-arrow-left"></i> Back to List
+        </a>
+    </div>
+    
+    <!-- Feedback status card -->
+    <div class="row mb-4">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header bg-{% if feedback.status == 'SENT' %}success{% elif feedback.status == 'PENDING' %}warning{% else %}danger{% endif %} text-white">
+                    <h5 class="mb-0">
+                        {% if feedback.status == 'SENT' %}
+                            <i class="bi bi-check-circle-fill me-2"></i> Feedback Sent
+                        {% elif feedback.status == 'PENDING' %}
+                            <i class="bi bi-clock-fill me-2"></i> Feedback Pending
+                        {% else %}
+                            <i class="bi bi-x-circle-fill me-2"></i> Feedback Failed
+                        {% endif %}
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <p><strong>Project:</strong> <a href="{% url 'projects:detail' feedback.project.id %}">{{ feedback.project.name }}</a></p>
+                            <p><strong>Subcontractor:</strong> {{ feedback.subcontractor.company }}</p>
+                            <p><strong>Email:</strong> <a href="mailto:{{ feedback.subcontractor.email }}">{{ feedback.subcontractor.email }}</a></p>
+                            <p><strong>Trade:</strong> {{ feedback.trade }}</p>
+                        </div>
+                        <div class="col-md-6">
+                            <p><strong>Created:</strong> {{ feedback.created_at|date:"d/m/Y H:i" }}</p>
+                            <p><strong>Status:</strong> 
+                                {% if feedback.status == 'SENT' %}
+                                    <span class="badge bg-success">Sent</span>
+                                {% elif feedback.status == 'PENDING' %}
+                                    <span class="badge bg-warning">Pending</span>
+                                {% else %}
+                                    <span class="badge bg-danger">Failed</span>
+                                {% endif %}
+                            </p>
+                            <p><strong>Sent at:</strong> 
+                                {% if feedback.sent_at %}
+                                    {{ feedback.sent_at|date:"d/m/Y H:i" }}
+                                {% else %}
+                                    <span class="text-muted">Not sent</span>
+                                {% endif %}
+                            </p>
+                            <p><strong>Spreadsheet:</strong> {{ feedback.spreadsheet_path|default:"Not specified" }}</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Action buttons -->
+                    <div class="mt-3">
+                        {% if feedback.status == 'PENDING' %}
+                            <form method="post" action="{% url 'feedback:send_single_feedback' feedback.id %}" style="display: inline;">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-success">
+                                    <i class="bi bi-envelope"></i> Send Feedback
+                                </button>
+                            </form>
+                        {% elif feedback.status == 'FAILED' %}
+                            <form method="post" action="{% url 'feedback:resend_feedback' feedback.id %}" style="display: inline;">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-warning">
+                                    <i class="bi bi-arrow-clockwise"></i> Retry Sending
+                                </button>
+                            </form>
+                        {% endif %}
+                        
+                        <button type="button" class="btn btn-primary ms-2" data-bs-toggle="modal" data-bs-target="#previewModal">
+                            <i class="bi bi-eye"></i> Preview Email
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Comparison data card -->
+    {% if feedback.comparison_data %}
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">Comparison Data</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-{% if is_selected %}success{% else %}secondary{% endif %} mb-4">
+                            <h5 class="alert-heading">
+                                {% if is_selected %}
+                                    <i class="bi bi-check-circle-fill me-2"></i> This subcontractor was selected
+                                {% else %}
+                                    <i class="bi bi-x-circle me-2"></i> This subcontractor was not selected
+                                {% endif %}
+                            </h5>
+                            {% if total_value %}
+                                <p class="mb-0">
+                                    <strong>Total Bid Value:</strong> 
+                                    {% if total_value %}
+                                        £{{ total_value|floatformat:2 }}
+                                    {% else %}
+                                        Not specified
+                                    {% endif %}
+                                </p>
+                            {% endif %}
+                        </div>
+                        
+                        <h5 class="mb-3">Comparison Items</h5>
+                        {% if formatted_items %}
+                            <div class="table-responsive">
+                                <table class="table table-bordered comparison-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Item</th>
+                                            <th>Value</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for item in formatted_items %}
+                                            <tr>
+                                                <td>{{ item.name }}</td>
+                                                <td>{{ item.value }}</td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        {% else %}
+                            <div class="alert alert-info">
+                                No comparison items found in the data.
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+    
+    <!-- Email content card -->
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0">Email Subject</h5>
+                </div>
+                <div class="card-body">
+                    <p class="mb-0">{{ feedback.email_subject|default:"No subject specified" }}</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0">Email Status</h5>
+                </div>
+                <div class="card-body">
+                    {% if feedback.status == 'SENT' %}
+                        <div class="alert alert-success mb-0">
+                            <i class="bi bi-check-circle-fill me-2"></i> Email was sent successfully on {{ feedback.sent_at|date:"d/m/Y" }} at {{ feedback.sent_at|time:"H:i" }}.
+                        </div>
+                    {% elif feedback.status == 'PENDING' %}
+                        <div class="alert alert-warning mb-0">
+                            <i class="bi bi-clock-fill me-2"></i> Email is pending and has not been sent yet.
+                        </div>
+                    {% else %}
+                        <div class="alert alert-danger mb-0">
+                            <i class="bi bi-x-circle-fill me-2"></i> Email sending failed. Please check the logs for more details.
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Preview Modal -->
+    <div class="modal fade" id="previewModal" tabindex="-1" aria-labelledby="previewModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="previewModalLabel">Email Preview</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <strong>Subject:</strong> {{ feedback.email_subject|default:"No subject specified" }}
+                    </div>
+                    <iframe src="{% url 'feedback:preview_feedback' feedback.id %}" class="preview-frame"></iframe>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    {% if feedback.status == 'PENDING' %}
+                        <form method="post" action="{% url 'feedback:send_single_feedback' feedback.id %}">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-envelope"></i> Send Email
+                            </button>
+                        </form>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

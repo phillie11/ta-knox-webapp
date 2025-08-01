@@ -1,0 +1,160 @@
+<!-- tenders/templates/tenders/tender_response.html - FIXED and SIMPLIFIED -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tender Response - {{ project.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
+    <style>
+        body { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Arial', sans-serif;
+        }
+        .response-card {
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            background: rgba(255, 255, 255, 0.95);
+        }
+        .btn-response {
+            border-radius: 15px;
+            padding: 15px 30px;
+            font-size: 1.2rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            margin: 10px;
+        }
+        .btn-yes {
+            background: linear-gradient(45deg, #28a745, #20c997);
+            color: white;
+            border: none;
+        }
+        .btn-yes:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(40, 167, 69, 0.4);
+            color: white;
+        }
+        .btn-no {
+            background: linear-gradient(45deg, #dc3545, #fd7e14);
+            color: white;
+            border: none;
+        }
+        .btn-no:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(220, 53, 69, 0.4);
+            color: white;
+        }
+        .logo-container {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .project-info {
+            background: linear-gradient(45deg, #f8f9fa, #e9ecef);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <!-- Company Logo -->
+                <div class="logo-container">
+                    <img src="https://www.taknox.co.uk/wp-content/uploads/2020/09/taknox-logo.png" alt="TA Knox Logo" height="80">
+                </div>
+
+                <!-- Main Response Card -->
+                <div class="card response-card">
+                    <div class="card-header bg-primary text-white text-center">
+                        <h3 class="mb-0">
+                            <i class="bi bi-envelope-open me-2"></i>
+                            Tender Response Required
+                        </h3>
+                    </div>
+                    
+                    <div class="card-body p-5">
+                        <!-- Greeting -->
+                        <div class="text-center mb-4">
+                            <h4>Dear {{ subcontractor.first_name|default:"Sir/Madam" }},</h4>
+                            <p class="lead">We need your response to our tender invitation.</p>
+                        </div>
+
+                        <!-- Project Information -->
+                        <div class="project-info">
+                            <h5 class="mb-3">
+                                <i class="bi bi-building me-2"></i>
+                                Project: {{ project.name }}
+                            </h5>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <p><strong>Company:</strong> {{ subcontractor.company }}</p>
+                                    {% if project.location %}
+                                        <p><strong>Location:</strong> {{ project.location }}</p>
+                                    {% endif %}
+                                </div>
+                                <div class="col-md-6">
+                                    {% if project.tender_deadline %}
+                                        <p><strong>Deadline:</strong> {{ project.tender_deadline|date:"d/m/Y H:i" }}</p>
+                                    {% elif project.sc_deadline %}
+                                        <p><strong>Deadline:</strong> {{ project.sc_deadline|date:"d/m/Y" }}</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Question -->
+                        <div class="text-center mb-4">
+                            <h5 class="mb-3">Will you be submitting a tender for this project?</h5>
+                            <p class="text-muted">Please click one of the buttons below to let us know.</p>
+                        </div>
+
+                        <!-- Response Buttons - FIXED URLs -->
+                        <div class="text-center">
+                            <a href="{% url 'tenders:response' token %}?response=yes" class="btn btn-response btn-yes">
+                                <i class="bi bi-check-circle-fill me-2"></i>
+                                Yes, I will tender
+                            </a>
+                            
+                            <a href="{% url 'tenders:response' token %}?response=no" class="btn btn-response btn-no">
+                                <i class="bi bi-x-circle-fill me-2"></i>
+                                No, I won't tender
+                            </a>
+                        </div>
+
+                        <!-- Additional Information -->
+                        <div class="mt-4">
+                            <div class="alert alert-info">
+                                <h6 class="alert-heading">
+                                    <i class="bi bi-info-circle me-2"></i>
+                                    Important Information
+                                </h6>
+                                <ul class="mb-0">
+                                    <li>Your response will be recorded immediately</li>
+                                    <li>This link is for your use only</li>
+                                    <li>If you have any questions, please contact our estimating team</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Footer -->
+                <div class="text-center mt-4">
+                    <p class="text-white">
+                        <small>&copy; {{ "now"|date:"Y" }} TA Knox Ltd. All rights reserved.</small>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

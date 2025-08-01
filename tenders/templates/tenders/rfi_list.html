@@ -1,0 +1,168 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}RFI Management - {{ project.name }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>RFI Management - {{ project.name }}</h1>
+        <div>
+            {% if analysis %}
+                {% if can_generate %}
+                    <a href="{% url 'tenders:generate_rfis' project.id %}" class="btn btn-primary">
+                        <i class="bi bi-plus-circle"></i> Generate RFIs
+                    </a>
+                {% else %}
+                    <form method="post" action="{% url 'tenders:regenerate_rfis' project.id %}" class="d-inline">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-warning" onclick="return confirm('This will delete existing RFIs and generate new ones. Continue?')">
+                            <i class="bi bi-arrow-clockwise"></i> Regenerate RFIs
+                        </button>
+                    </form>
+                {% endif %}
+                <a href="{% url 'tenders:export_rfi_schedule' project.id %}" class="btn btn-success ms-2">
+                    <i class="bi bi-download"></i> Export Excel
+                </a>
+            {% endif %}
+            <a href="{% url 'tenders:analysis' project.id %}" class="btn btn-outline-secondary ms-2">
+                <i class="bi bi-arrow-left"></i> Back to Analysis
+            </a>
+        </div>
+    </div>
+
+    {% if not analysis %}
+        <div class="alert alert-warning">
+            <h5><i class="bi bi-exclamation-triangle"></i> No Analysis Available</h5>
+            <p>RFI generation requires a completed AI analysis. Please generate analysis first.</p>
+            <a href="{% url 'projects:detail' project.id %}" class="btn btn-primary">Go to Project</a>
+        </div>
+    {% elif rfis.count == 0 %}
+        <div class="alert alert-info">
+            <h5><i class="bi bi-info-circle"></i> No RFIs Generated</h5>
+            <p>Generate RFI items based on the AI analysis to identify areas requiring clarification.</p>
+            <a href="{% url 'tenders:generate_rfis' project.id %}" class="btn btn-primary">
+                <i class="bi bi-plus-circle"></i> Generate RFIs Now
+            </a>
+        </div>
+    {% else %}
+        <!-- Statistics Cards -->
+        <div class="row mb-4">
+            <div class="col-md-2">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h4 class="text-primary">{{ stats.total }}</h4>
+                        <small>Total RFIs</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h4 class="text-warning">{{ stats.pending }}</h4>
+                        <small>Pending</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h4 class="text-info">{{ stats.submitted }}</h4>
+                        <small>Submitted</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h4 class="text-primary">{{ stats.responded }}</h4>
+                        <small>Responded</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h4 class="text-success">{{ stats.resolved }}</h4>
+                        <small>Resolved</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RFI Table -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">RFI Items</h5>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>RFI #</th>
+                            <th>Category</th>
+                            <th>Priority</th>
+                            <th>Question</th>
+                            <th>Impact</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for rfi in rfis %}
+                        <tr>
+                            <td><strong>{{ rfi.rfi_number }}</strong></td>
+                            <td>
+                                <span class="badge bg-secondary">{{ rfi.get_category_display }}</span>
+                            </td>
+                            <td>
+                                <span class="badge bg-{{ rfi.priority_color }}">{{ rfi.get_priority_display }}</span>
+                            </td>
+                            <td>
+                                <div class="text-truncate" style="max-width: 300px;" title="{{ rfi.question }}">
+                                    {{ rfi.question }}
+                                </div>
+                                {% if rfi.context %}
+                                    <small class="text-muted">{{ rfi.context|truncatewords:10 }}</small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="badge bg-{% if rfi.pricing_impact == 'HIGH' %}danger{% elif rfi.pricing_impact == 'MEDIUM' %}warning{% else %}info{% endif %}">
+                                    {{ rfi.pricing_impact }}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge bg-{% if rfi.status == 'CLARIFIED' %}success{% elif rfi.status == 'RESPONDED' %}info{% elif rfi.status == 'SUBMITTED' %}primary{% else %}warning{% endif %}">
+                                    {{ rfi.get_status_display }}
+                                </span>
+                                {% if rfi.is_overdue %}
+                                    <br><small class="text-danger">Overdue</small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="{% url 'tenders:rfi_detail' project.id rfi.id %}" class="btn btn-sm btn-outline-primary">
+                                    <i class="bi bi-eye"></i> View
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+
+
+
+
+
+
+
+
+
+
+
+

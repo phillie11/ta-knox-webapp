@@ -1,0 +1,807 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load tender_filters %}
+
+{% block title %}{{ project.name }} - CRM System{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>{{ project.name }}</h1>
+    <div>
+      <a href="{% url 'projects:update' project.id %}" class="btn btn-outline-primary me-2">
+        <i class="bi bi-pencil"></i> Edit Project
+      </a>
+      <a href="{% url 'tenders:send_invitation' project.id %}" class="btn btn-primary">
+        <i class="bi bi-send"></i> Send Tender Invitations
+      </a>
+    </div>
+  </div>
+
+  <div class="row">
+    <!-- Main Content -->
+    <div class="col-md-8">
+      <div class="row">
+        <!-- Basic Information -->
+        <div class="col-md-6">
+          <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+              <h5 class="mb-0">Basic Information</h5>
+            </div>
+            <div class="card-body">
+              <table class="table table-borderless">
+                <tr>
+                  <td><strong>Reference:</strong></td>
+                  <td>{{ project.reference|default:"Not specified" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Location:</strong></td>
+                  <td>{{ project.location|default:"Not specified" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Status:</strong></td>
+                  <td>
+                    <span class="badge bg-{% if project.status == 'LIVE' %}primary{% elif project.status == 'SUCCESSFUL' %}success{% elif project.status == 'UNSUCCESSFUL' %}danger{% else %}secondary{% endif %}">
+                      {{ project.get_status_display }}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td><strong>Estimator:</strong></td>
+                  <td>{{ project.estimator|default:"Not assigned" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Project Manager:</strong></td>
+                  <td>{{ project.project_manager|default:"Not assigned" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>PMQs:</strong></td>
+                  <td>{{ project.pmqs|default:"Not specified" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Contract Type:</strong></td>
+                  <td>{{ project.contract_type|default:"Not specified" }}</td>
+                </tr>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Key Dates -->
+        <div class="col-md-6">
+          <div class="card mb-4">
+            <div class="card-header bg-info text-white">
+              <h5 class="mb-0">Key Dates</h5>
+            </div>
+            <div class="card-body">
+              <table class="table table-borderless">
+                <tr>
+                  <td><strong>Start Date:</strong></td>
+                  <td>{{ project.start_date|date:"d/m/Y" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Win Room Date:</strong></td>
+                  <td>{{ project.win_room_date|date:"d/m/Y"|default:"Not set" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Site Visit Date:</strong></td>
+                  <td>{{ project.site_visit_date|date:"d/m/Y"|default:"Not set" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>RFI Deadline:</strong></td>
+                  <td>{{ project.rfi_deadline|date:"d/m/Y"|default:"Not set" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>SC Deadline:</strong></td>
+                  <td class="text-danger">{{ project.sc_deadline|date:"d/m/Y"|default:"Not set" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Mid Bid Review:</strong></td>
+                  <td>{{ project.mid_bid_review_date|date:"d/m/Y"|default:"Not set" }}</td>
+                </tr>
+                <tr>
+                  <td><strong>Tender Deadline:</strong></td>
+                  <td class="text-primary">{{ project.tender_deadline|date:"d/m/Y H:i"|default:"Not set" }}</td>
+                </tr>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <!-- Tender Details -->
+        <div class="col-md-6">
+          <div class="card mb-4">
+            <div class="card-header bg-success text-white">
+              <h5 class="mb-0">Tender Details</h5>
+            </div>
+            <div class="card-body">
+              <table class="table table-borderless">
+                <tr>
+                  <td><strong>Tender Bid Amount:</strong></td>
+                  <td>
+                    {% if project.tender_bid_amount %}
+                      <span class="text-success fw-bold">£{{ project.tender_bid_amount|floatformat:2 }}</span>
+                    {% else %}
+                      <span class="text-muted">Not submitted</span>
+                    {% endif %}
+                  </td>
+                </tr>
+                <tr>
+                  <td><strong>Margin Percentage:</strong></td>
+                  <td>
+                    {% if project.margin_percentage %}
+                      <span class="text-success">{{ project.margin_percentage }}%</span>
+                    {% else %}
+                      <span class="text-muted">Not specified</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Description -->
+        <div class="col-md-6">
+          <div class="card mb-4">
+            <div class="card-header bg-secondary text-white">
+              <h5 class="mb-0">Description</h5>
+            </div>
+            <div class="card-body">
+              {% if project.description %}
+                <p class="mb-0">{{ project.description|linebreaks }}</p>
+              {% else %}
+                <p class="text-muted mb-0">No description provided.</p>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Key Risks -->
+      {% if project.key_risks %}
+      <div class="card mb-4">
+        <div class="card-header bg-warning">
+          <h5 class="mb-0">Key Risks</h5>
+        </div>
+        <div class="card-body">
+          <p class="mb-0">{{ project.key_risks|linebreaks }}</p>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- AI Analysis Summary -->
+      {% if project.tender_analysis %}
+        <div class="card mb-4 border-info">
+          <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">
+              <i class="bi bi-robot"></i> AI Analysis Summary
+            </h5>
+            <a href="{% url 'tenders:analysis' project.id %}" class="btn btn-dark btn-sm">
+              <i class="bi bi-eye"></i> View Full Analysis
+            </a>
+          </div>
+          <div class="card-body">
+            <div class="row">
+              <div class="col-md-6">
+                <h6>Risk Assessment</h6>
+                <span class="badge
+                  {% if project.tender_analysis.risk_level == 'LOW' %}bg-success
+                  {% elif project.tender_analysis.risk_level == 'MEDIUM' %}bg-warning
+                  {% elif project.tender_analysis.risk_level == 'HIGH' %}bg-danger
+                  {% else %}bg-dark{% endif %} mb-3">
+                  {{ project.tender_analysis.get_risk_level_display }}
+                </span>
+
+                {% if project.tender_analysis.estimated_value_range.min %}
+                  <h6>Estimated Value</h6>
+                  <p>£{{ project.tender_analysis.estimated_value_range.min|floatformat:0 }}
+                  {% if project.tender_analysis.estimated_value_range.max and project.tender_analysis.estimated_value_range.max != project.tender_analysis.estimated_value_range.min %}
+                    - £{{ project.tender_analysis.estimated_value_range.max|floatformat:0 }}
+                  {% endif %}</p>
+                {% endif %}
+              </div>
+              <div class="col-md-6">
+                <h6>AI Recommendations</h6>
+                <p>{{ project.tender_analysis.subcontractor_recommendations.count }} subcontractor recommendations generated</p>
+
+                <h6>Open Questions</h6>
+                <p>{{ project.tender_analysis.tender_questions.count }} clarification questions</p>
+              </div>
+            </div>
+
+            <div class="mt-3">
+              <a href="{% url 'tenders:analysis' project.id %}" class="btn btn-info me-2">
+                <i class="bi bi-robot"></i> View Full Analysis
+              </a>
+              {% if project.tender_analysis.subcontractor_recommendations.count > 0 %}
+                <a href="{% url 'tenders:bulk_invite_recommended' project.id %}" class="btn btn-success">
+                  <i class="bi bi-send"></i> Invite Recommended Subcontractors
+                </a>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      <!-- SharePoint Documents Section -->
+      <div class="card mb-4">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+          <h5 class="mb-0">
+            <i class="bi bi-folder-symlink me-2"></i>SharePoint Documents
+          </h5>
+          <button type="button" class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#updateSharePointModal">
+            <i class="bi bi-pencil"></i> Update Link
+          </button>
+        </div>
+        <div class="card-body">
+          {% if project.sharepoint_folder_url %}
+            <div class="d-flex align-items-center justify-content-between p-3 border rounded bg-light">
+              <div>
+                <h6 class="mb-1">
+                  <i class="bi bi-link-45deg text-primary me-2"></i>
+                  {{ project.sharepoint_link_description|default:"ITT Documents" }}
+                </h6>
+                <small class="text-muted">{{ project.sharepoint_folder_url|truncatechars:80 }}</small>
+              </div>
+              <div>
+                <a href="{{ project.sharepoint_folder_url }}" class="btn btn-primary btn-sm me-2" target="_blank">
+                  <i class="bi bi-box-arrow-up-right"></i> Open in SharePoint
+                </a>
+                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="copyToClipboard('{{ project.sharepoint_folder_url }}')">
+                  <i class="bi bi-clipboard"></i> Copy Link
+                </button>
+              </div>
+            </div>
+
+            <div class="card mb-4">
+              <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                  <i class="bi bi-folder-symlink me-2"></i>SharePoint Documents
+                </h5>
+                <button type="button" class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#updateSharePointModal">
+                  <i class="bi bi-pencil"></i> Update Link
+                </button>
+              </div>
+              <div class="card-body">
+                {% if project.sharepoint_folder_url %}
+                  <div class="d-flex align-items-center justify-content-between p-3 border rounded bg-light">
+                    <div>
+                      <h6 class="mb-1">
+                        <i class="bi bi-link-45deg text-primary me-2"></i>
+                        {{ project.sharepoint_link_description|default:"ITT Documents" }}
+                      </h6>
+                      <small class="text-muted">{{ project.sharepoint_folder_url|truncatechars:80 }}</small>
+                    </div>
+                    <div>
+                      <a href="{{ project.sharepoint_folder_url }}" class="btn btn-primary btn-sm me-2" target="_blank">
+                        <i class="bi bi-box-arrow-up-right"></i> Open in SharePoint
+                      </a>
+                      <button type="button" class="btn btn-outline-secondary btn-sm" onclick="copyToClipboard('{{ project.sharepoint_folder_url }}')">
+                        <i class="bi bi-clipboard"></i> Copy Link
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- AI Analysis Section with Recursive Option -->
+                  <div class="mt-3">
+                    {% if project.tender_analysis %}
+                      <div class="alert alert-success">
+                        <i class="bi bi-check-circle me-2"></i>
+                        <strong>AI Analysis Complete</strong> - Documents analyzed from all folders and subfolders.
+                        <div class="mt-2">
+                          <small class="text-muted">
+                            <i class="bi bi-files"></i>
+                            Analyzed: {{ project.tender_analysis.documents_analyzed|length }} documents
+                          </small>
+                        </div>
+                        <div class="mt-2">
+                          <a href="{% url 'tenders:analysis' project.id %}" class="btn btn-sm btn-success me-2">
+                            <i class="bi bi-eye"></i> View Analysis
+                          </a>
+                          <div class="btn-group" role="group">
+                            <button type="button" class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown">
+                              <i class="bi bi-arrow-clockwise"></i> Update Analysis
+                            </button>
+                            <ul class="dropdown-menu">
+                              <li>
+                                <form method="post" action="{% url 'tenders:update_analysis' project.id %}" style="display: inline;">
+                                  {% csrf_token %}
+                                  <input type="hidden" name="recursive" value="true">
+                                  <button type="submit" class="dropdown-item">
+                                    <i class="bi bi-folder-fill me-2"></i> All Folders & Subfolders
+                                  </button>
+                                </form>
+                              </li>
+                              <li>
+                                <form method="post" action="{% url 'tenders:update_analysis' project.id %}" style="display: inline;">
+                                  {% csrf_token %}
+                                  <input type="hidden" name="recursive" value="false">
+                                  <button type="submit" class="dropdown-item">
+                                    <i class="bi bi-folder me-2"></i> Main Folder Only
+                                  </button>
+                                </form>
+                              </li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    {% else %}
+                      <div class="alert alert-info">
+                        <i class="bi bi-robot me-2"></i>
+                        <strong>Ready for AI Analysis</strong> - Generate intelligent insights from your SharePoint documents.
+                        <div class="mt-3">
+                          <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" id="recursiveAnalysis" checked>
+                            <label class="form-check-label" for="recursiveAnalysis">
+                              <i class="bi bi-folder-fill me-1"></i> Include documents from subfolders
+                            </label>
+                            <div class="form-text">
+                              Recommended: Analyzes all documents in the folder and its subfolders for comprehensive insights
+                            </div>
+                          </div>
+
+                          <button type="button" class="btn btn-sm btn-warning" onclick="generateAnalysisWithOptions()">
+                            <i class="bi bi-magic"></i> Generate AI Analysis
+                          </button>
+                        </div>
+                      </div>
+                    {% endif %}
+                  </div>
+
+                  <div class="mt-2">
+                    <small class="text-info">
+                      <i class="bi bi-info-circle me-1"></i>
+                      This link will be automatically included in tender invitations sent to subcontractors.
+                    </small>
+                  </div>
+                {% else %}
+                  <div class="text-center py-4">
+                    <div class="text-muted mb-3">
+                      <i class="bi bi-folder-x" style="font-size: 3rem;"></i>
+                    </div>
+                    <h6 class="text-muted">No SharePoint folder configured</h6>
+                    <p class="text-muted">Add a SharePoint folder URL to enable AI analysis and automatically include documents in tender invitations.</p>
+                    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#updateSharePointModal">
+                      <i class="bi bi-plus-circle"></i> Add SharePoint Folder
+                    </button>
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+
+            <!-- AI Analysis Section -->
+            <div class="mt-3">
+              {% if project.tender_analysis %}
+                <div class="alert alert-success">
+                  <i class="bi bi-check-circle me-2"></i>
+                  <strong>AI Analysis Complete</strong> - Documents analyzed and recommendations generated.
+                  <div class="mt-2">
+                    <a href="{% url 'tenders:analysis' project.id %}" class="btn btn-sm btn-success me-2">
+                      <i class="bi bi-eye"></i> View Analysis
+                    </a>
+                    <form method="post" action="{% url 'tenders:update_analysis' project.id %}" style="display: inline;">
+                      {% csrf_token %}
+                      <button type="submit" class="btn btn-sm btn-outline-primary">
+                        <i class="bi bi-arrow-clockwise"></i> Update Analysis
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              {% else %}
+                <div class="alert alert-info">
+                  <i class="bi bi-robot me-2"></i>
+                  <strong>Ready for AI Analysis</strong> - Generate intelligent insights from your SharePoint documents.
+                  <div class="mt-2">
+                    <form method="post" action="{% url 'tenders:generate_analysis' project.id %}">
+                      {% csrf_token %}
+                      <button type="submit" class="btn btn-sm btn-warning">
+                        <i class="bi bi-magic"></i> Generate AI Analysis
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              {% endif %}
+            </div>
+
+            <div class="mt-2">
+              <small class="text-info">
+                <i class="bi bi-info-circle me-1"></i>
+                This link will be automatically included in tender invitations sent to subcontractors.
+              </small>
+            </div>
+          {% else %}
+            <div class="text-center py-4">
+              <div class="text-muted mb-3">
+                <i class="bi bi-folder-x" style="font-size: 3rem;"></i>
+              </div>
+              <h6 class="text-muted">No SharePoint folder configured</h6>
+              <p class="text-muted">Add a SharePoint folder URL to enable AI analysis and automatically include documents in tender invitations.</p>
+              <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#updateSharePointModal">
+                <i class="bi bi-plus-circle"></i> Add SharePoint Folder
+              </button>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Email Monitoring Card -->
+      <div class="card mb-4">
+        <div class="card-header bg-primary d-flex justify-content-between align-items-center">
+          <h5 class="mb-0">Email Monitoring</h5>
+          <div>
+            {% if project.email_config %}
+              <a href="{% url 'communications:check_now' project.id %}" class="btn btn-sm btn-success me-2">
+                <i class="bi bi-arrow-clockwise"></i> Check Now
+              </a>
+            {% endif %}
+            <button type="button" class="btn btn-sm btn-dark" data-bs-toggle="modal" data-bs-target="#emailMonitoringModal">
+              <i class="bi bi-gear"></i> Configure
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          {% if project.email_config %}
+            <p><strong>Monitoring Status:</strong>
+              {% if project.email_config.is_active %}
+                <span class="badge bg-success">Active</span>
+              {% else %}
+                <span class="badge bg-secondary">Inactive</span>
+              {% endif %}
+            </p>
+            <p><strong>Folder Name:</strong> {{ project.email_config.folder_name }}</p>
+            <p><strong>Last Checked:</strong>
+              {% if project.email_config.last_check_time %}
+                {{ project.email_config.last_check_time|date:"d/m/Y H:i" }}
+              {% else %}
+                Never <small class="text-muted">(click "Check Now" to run manually)</small>
+              {% endif %}
+            </p>
+          {% else %}
+            <p class="text-muted">Email monitoring not configured. Click Configure to set up.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="col-md-4">
+      <!-- Tender Statistics -->
+      <div class="card mb-4">
+        <div class="card-header bg-white">
+          <h5 class="mb-0">Tender Statistics</h5>
+        </div>
+        <div class="card-body">
+          {% with invitation_count=project.invitations.count %}
+            {% if invitation_count > 0 %}
+              <div class="row text-center">
+                <div class="col-4">
+                  <div class="display-6">{{ invitation_count }}</div>
+                  <div class="small text-muted">Invitations</div>
+                </div>
+                <div class="col-4">
+                  <div class="display-6 text-success">{{ project.invitations.count|default:"0" }}</div>
+                  <div class="small text-muted">Will Tender</div>
+                </div>
+                <div class="col-4">
+                  <div class="display-6 text-danger">{{ project.invitations.count|default:"0" }}</div>
+                  <div class="small text-muted">Won't Tender</div>
+                </div>
+              </div>
+
+              <div class="d-grid mt-3">
+                <a href="{% url 'tenders:tracking' project.id %}" class="btn btn-primary">
+                  <i class="bi bi-kanban"></i> View Tender Tracking
+                </a>
+              </div>
+            {% else %}
+              <div class="text-center py-3">
+                <div class="text-muted mb-3">No tender invitations have been sent yet.</div>
+                <a href="{% url 'tenders:send_invitation' project.id %}" class="btn btn-primary">
+                  <i class="bi bi-send"></i> Send Invitations
+                </a>
+              </div>
+            {% endif %}
+          {% endwith %}
+        </div>
+      </div>
+
+      <!-- AI Analysis Quick Actions -->
+      {% if project.tender_analysis %}
+        <div class="card mb-4 border-info">
+          <div class="card-header bg-info text-white">
+            <h5 class="mb-0">
+              <i class="bi bi-robot"></i> AI Insights
+            </h5>
+          </div>
+          <div class="list-group list-group-flush">
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+              Risk Level
+              <span class="badge
+                {% if project.tender_analysis.risk_level == 'LOW' %}bg-success
+                {% elif project.tender_analysis.risk_level == 'MEDIUM' %}bg-warning
+                {% elif project.tender_analysis.risk_level == 'HIGH' %}bg-danger
+                {% else %}bg-dark{% endif %}">
+                {{ project.tender_analysis.get_risk_level_display }}
+              </span>
+            </div>
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+              Recommendations
+              <span class="badge bg-primary">{{ project.tender_analysis.subcontractor_recommendations.count }}</span>
+            </div>
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+              Open Questions
+              <span class="badge bg-warning">{{ project.tender_analysis.tender_questions.count }}</span>
+            </div>
+            <a href="{% url 'tenders:analysis' project.id %}" class="list-group-item list-group-item-action text-center">
+              <i class="bi bi-eye me-2"></i> View Full Analysis
+            </a>
+          </div>
+        </div>
+      {% endif %}
+
+      <!-- Project Actions -->
+      <div class="card mb-4">
+        <div class="card-header bg-primary text-white">
+          <h5 class="mb-0">Project Actions</h5>
+        </div>
+        <div class="card-body">
+          <div class="d-grid gap-2">
+            <a href="{% url 'tenders:analysis' project.id %}" class="btn btn-info">
+              <i class="bi bi-robot me-2"></i> AI Analysis
+            </a>
+            <a href="{% url 'tenders:send_invitation' project.id %}" class="btn btn-success">
+              <i class="bi bi-send me-2"></i> Send Tender Invitations
+            </a>
+            <a href="{% url 'tenders:tracking' project.id %}" class="btn btn-warning">
+              <i class="bi bi-kanban me-2"></i> View Tender Tracking
+            </a>
+            <a href="{% url 'tenders:send_addendum' project.id %}" class="btn btn-dark">
+              <i class="bi bi-file-earmark-plus me-2"></i> Send Tender Addendum
+            </a>
+            <a href="{% url 'tenders:send_reminders' project.id %}" class="btn btn-info">
+              <i class="bi bi-bell me-2"></i> Send Reminders
+            </a>
+            <a href="{% url 'projects:update' project.id %}" class="btn btn-secondary">
+              <i class="bi bi-pencil me-2"></i> Edit Project Details
+            </a>
+            <a href="{% url 'projects:delete' project.id %}" class="btn btn-danger">
+              <i class="bi bi-trash me-2"></i> Delete Project
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Update SharePoint Modal -->
+<div class="modal fade" id="updateSharePointModal" tabindex="-1" aria-labelledby="updateSharePointModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="updateSharePointModalLabel">
+          <i class="bi bi-folder-symlink me-2"></i>Update SharePoint Documents Folder
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form method="post" action="{% url 'projects:update_sharepoint_link' project.id %}">
+        <div class="modal-body">
+          {% csrf_token %}
+          <div class="mb-3">
+            <label for="sharepoint_link" class="form-label">SharePoint Folder URL *</label>
+            <input type="url" class="form-control" id="sharepoint_link" name="sharepoint_folder_url"
+                   value="{{ project.sharepoint_folder_url|default:'' }}"
+                   placeholder="https://yourtenant.sharepoint.com/sites/sitename/Shared%20Documents/ProjectFolder" required>
+            <div class="form-text">Enter the complete SharePoint URL to your ITT documents folder</div>
+          </div>
+          <div class="mb-3">
+            <label for="sharepoint_description" class="form-label">Link Description</label>
+            <input type="text" class="form-control" id="sharepoint_description" name="sharepoint_link_description"
+                   value="{{ project.sharepoint_link_description|default:'ITT Documents' }}"
+                   placeholder="ITT Documents">
+            <div class="form-text">A descriptive name for this link (e.g., "ITT Documents", "Tender Package")</div>
+          </div>
+          <div class="alert alert-info">
+            <i class="bi bi-info-circle me-2"></i>
+            <strong>Note:</strong> This folder will be analyzed by AI to generate project insights and subcontractor recommendations.
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save SharePoint Folder</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Email Monitoring Modal -->
+<div class="modal fade" id="emailMonitoringModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Configure Email Monitoring</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form method="post" action="{% url 'communications:configure_monitoring' project.id %}">
+        <div class="modal-body">
+          <div class="mb-3" id="folderSelectionLoading">
+            <div class="d-flex align-items-center">
+              <strong>Loading folders...</strong>
+              <div class="spinner-border ms-auto" role="status" aria-hidden="true"></div>
+            </div>
+          </div>
+
+          <div class="mb-3" id="folderSelectionContainer" style="display:none;">
+            {% csrf_token %}
+            <label for="id_folder" class="form-label">Outlook Folder</label>
+            <select id="id_folder" name="folder" class="form-select" required>
+              <option value="">Select a folder</option>
+            </select>
+            <input type="hidden" id="id_folder_id" name="folder_id" value="">
+            <div class="form-text">Select the Outlook folder that contains tender returns for this project.</div>
+          </div>
+
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="id_is_active" name="is_active"
+                   {% if project.email_config and project.email_config.is_active %}checked{% endif %}>
+            <label class="form-check-label" for="id_is_active">Active</label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Configuration</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Enhanced analysis generation with recursive option
+function generateAnalysisWithOptions() {
+    const recursive = document.getElementById('recursiveAnalysis').checked;
+    const analysisType = recursive ? 'all folders and subfolders' : 'main folder only';
+
+    if (confirm(`Generate AI analysis from ${analysisType}? This may take a few minutes.`)) {
+        // Create a form and submit it
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '{% url "tenders:generate_analysis" project.id %}';
+
+        // Add CSRF token
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+        const csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = 'csrfmiddlewaretoken';
+        csrfInput.value = csrfToken;
+        form.appendChild(csrfInput);
+
+        // Add recursive option
+        const recursiveInput = document.createElement('input');
+        recursiveInput.type = 'hidden';
+        recursiveInput.name = 'recursive';
+        recursiveInput.value = recursive ? 'true' : 'false';
+        form.appendChild(recursiveInput);
+
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+</script>
+<script>
+// Copy to clipboard function
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(function() {
+        // Show success message
+        const toast = document.createElement('div');
+        toast.className = 'toast align-items-center text-white bg-success border-0';
+        toast.style.position = 'fixed';
+        toast.style.top = '20px';
+        toast.style.right = '20px';
+        toast.style.zIndex = '9999';
+        toast.innerHTML = `
+            <div class="d-flex">
+                <div class="toast-body">
+                    <i class="bi bi-check-circle me-2"></i>SharePoint link copied to clipboard!
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        `;
+        document.body.appendChild(toast);
+
+        if (typeof bootstrap !== 'undefined') {
+            const bsToast = new bootstrap.Toast(toast);
+            bsToast.show();
+
+            // Remove after hiding
+            toast.addEventListener('hidden.bs.toast', () => {
+                toast.remove();
+            });
+        } else {
+            // Fallback if Bootstrap JS not loaded
+            setTimeout(() => {
+                if (document.body.contains(toast)) {
+                    document.body.removeChild(toast);
+                }
+            }, 3000);
+        }
+    }).catch(function(err) {
+        console.error('Could not copy text: ', err);
+        alert('Failed to copy link to clipboard');
+    });
+}
+
+// Load mail folders when the modal opens
+document.getElementById('emailMonitoringModal').addEventListener('show.bs.modal', function (event) {
+  loadMailFolders();
+});
+
+function loadMailFolders() {
+  const loadingDiv = document.getElementById('folderSelectionLoading');
+  const folderContainer = document.getElementById('folderSelectionContainer');
+  const folderSelect = document.getElementById('id_folder');
+  const folderIdInput = document.getElementById('id_folder_id');
+
+  // Show loading indicator
+  loadingDiv.style.display = 'block';
+  folderContainer.style.display = 'none';
+
+  // Make AJAX request to get folders
+  fetch('{% url "communications:mail_folders" %}')
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        // Clear existing options
+        folderSelect.innerHTML = '<option value="">Select a folder</option>';
+
+        // Add folders to dropdown
+        data.folders.forEach(folder => {
+          const option = document.createElement('option');
+          option.value = folder.full_path;
+          option.textContent = folder.full_path;
+          option.dataset.folderId = folder.id;
+          folderSelect.appendChild(option);
+        });
+
+        // Set the current value if exists
+        const currentFolder = '{% if project.email_config %}{{ project.email_config.folder_name }}{% endif %}';
+        if (currentFolder) {
+          folderSelect.value = currentFolder;
+        }
+
+        // Add event listener to update the hidden folder ID field
+        folderSelect.addEventListener('change', function() {
+          const selectedOption = this.options[this.selectedIndex];
+          if (selectedOption) {
+            folderIdInput.value = selectedOption.dataset.folderId || '';
+          }
+        });
+
+        // Trigger change event to set initial folder ID
+        folderSelect.dispatchEvent(new Event('change'));
+
+        // Hide loading, show form
+        loadingDiv.style.display = 'none';
+        folderContainer.style.display = 'block';
+      } else {
+        alert('Error loading folders: ' + data.error);
+      }
+    })
+    .catch(error => {
+      console.error('Error:', error);
+      alert('Failed to load email folders. Please try again.');
+
+      // Hide loading, show form with a message
+      loadingDiv.style.display = 'none';
+      folderContainer.style.display = 'block';
+      folderSelect.innerHTML = '<option value="">Error loading folders</option>';
+    });
+}
+</script>
+{% endblock %}

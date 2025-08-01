@@ -1,0 +1,111 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Match Tender Return - {{ project.name }}{% endblock %}
+{% block content %}
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>Manually Match Tender Return</h1>
+    <a href="{% url 'tenders:tracking' project.id %}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-left"></i> Back to Tracking
+    </a>
+  </div>
+  <div class="card mb-4">
+    <div class="card-header bg-primary text-white">
+      <h5 class="mb-0">Project: {{ project.name }}</h5>
+    </div>
+    <div class="card-body">
+      <form id="matchTenderForm">
+        {% csrf_token %}
+        <input type="hidden" id="project_id" value="{{ project.id }}">
+    <div class="mb-3">
+      <label for="subcontractor_id" class="form-label">Subcontractor</label>
+      <select class="form-select" id="subcontractor_id" required>
+        <option value="">Select a subcontractor</option>
+        {% for invitation in invitations %}
+          <option value="{{ invitation.subcontractor.id }}">
+            {{ invitation.subcontractor.company }} ({{ invitation.subcontractor.email }})
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="mb-3">
+      <label for="sender_email" class="form-label">Actual Sender Email</label>
+      <input type="email" class="form-control" id="sender_email" required>
+      <div class="form-text">The email address that actually sent the tender return</div>
+    </div>
+
+    <div class="mb-3">
+      <label for="notes" class="form-label">Notes</label>
+      <textarea class="form-control" id="notes" rows="3"></textarea>
+    </div>
+
+    <div class="d-grid gap-2">
+      <button type="submit" class="btn btn-primary">
+        <i class="bi bi-check-circle"></i> Record Tender Return
+      </button>
+    </div>
+  </form>
+</div>
+  </div>
+  <!-- Result alert -->
+  <div id="result-alert" class="alert d-none"></div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script src="{% static 'js/manual_match.js' %}"></script>
+
+
+document.getElementById('matchTenderForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+
+    const projectId = document.getElementById('project_id').value;
+    const subcontractorId = document.getElementById('subcontractor_id').value;
+    const senderEmail = document.getElementById('sender_email').value;
+    const notes = document.getElementById('notes').value;
+
+    const data = {
+        project_id: projectId,
+        subcontractor_id: subcontractorId,
+        sender_email: senderEmail,
+        notes: notes
+    };
+
+    // Send the AJAX request
+    fetch('/tenders/manual-tender-return/', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(result => {
+        const alertDiv = document.getElementById('result-alert');
+        alertDiv.innerHTML = '';
+        alertDiv.classList.remove('d-none', 'alert-success', 'alert-danger');
+
+        if (result.success) {
+            alertDiv.classList.add('alert-success');
+            alertDiv.innerHTML = `<i class="bi bi-check-circle"></i> ${result.message}`;
+
+            // Redirect after 2 seconds
+            setTimeout(() => {
+                window.location.href = `/tenders/project/${projectId}/tracking/`;
+            }, 2000);
+        } else {
+            alertDiv.classList.add('alert-danger');
+            alertDiv.innerHTML = `<i class="bi bi-exclamation-triangle"></i> Error: ${result.error}`;
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        const alertDiv = document.getElementById('result-alert');
+        alertDiv.classList.remove('d-none');
+        alertDiv.classList.add('alert-danger');
+        alertDiv.innerHTML = `<i class="bi bi-exclamation-triangle"></i> Error: ${error.message}`;
+    });
+});
+
+{% endblock %}

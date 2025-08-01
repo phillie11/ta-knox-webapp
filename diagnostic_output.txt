@@ -1,0 +1,26 @@
+Python version: 3.9.21 (main, Jan 16 2025, 11:31:13) 
+[GCC 11.4.0]
+Python path: ['/home/TAKnox/crm_system/crm_system', '/usr/local/lib/python39.zip', '/usr/local/lib/python3.9', '/usr/local/lib/python3.9/lib-dynload', '/home/TAKnox/.virtualenvs/myenv/lib/python3.9/site-packages']
+Loading .env from: /home/TAKnox/crm_system/crm_system/.env
+Django successfully configured
+Django version: 4.2.7
+ALLOWED_HOSTS: ['TAKnox.pythonanywhere.com', 'localhost', '127.0.0.1']
+DEBUG: True
+Database connection successful
+Installed apps:
+  - django.contrib.admin
+  - django.contrib.auth
+  - django.contrib.contenttypes
+  - django.contrib.sessions
+  - django.contrib.messages
+  - django.contrib.staticfiles
+  - rest_framework
+  - crispy_forms
+  - crispy_bootstrap5
+  - accounts
+  - subcontractors
+  - projects
+  - tenders
+  - communications
+  - project_tracker
+  - django_q

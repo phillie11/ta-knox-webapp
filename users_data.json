@@ -1,0 +1,146 @@
+[
+  {
+    "model": "auth.user",
+    "pk": 1,
+    "fields": {
+      "password": "pbkdf2_sha256$600000$xiFzREeABglJoopJdpmCC0$re0Oe+gwqqHAi7jIfSvlChXXdhLAN3TShxl5ieouOR4=",
+      "last_login": "2025-06-10T14:42:44.194Z",
+      "is_superuser": false,
+      "username": "MarkOKane",
+      "first_name": "Mark",
+      "last_name": "O'Kane",
+      "email": "mark.o'kane@ta-knox.co.uk",
+      "is_staff": true,
+      "is_active": true,
+      "date_joined": "2025-04-10T10:49:24Z",
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 6,
+    "fields": {
+      "password": "pbkdf2_sha256$600000$0cpBuwBqqdeBxzQDvLkS5t$L2J8wshpXWiJeYmKcD3lJm/ngseggFBJz5qkx5QGG6c=",
+      "last_login": "2025-06-12T07:28:31.728Z",
+      "is_superuser": true,
+      "username": "PCohen",
+      "first_name": "",
+      "last_name": "",
+      "email": "phil.cohen@ta-knox.co.uk",
+      "is_staff": true,
+      "is_active": true,
+      "date_joined": "2025-04-26T21:57:59Z",
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 7,
+    "fields": {
+      "password": "pbkdf2_sha256$600000$KJB65a21CZ4B8rH5DfIila$hJkNfNWnuLqaILD0JOM4Znis0BWYnT3VflNvhMMwQw8=",
+      "last_login": "2025-06-17T08:26:49.269Z",
+      "is_superuser": false,
+      "username": "Hannah.Arnold@ta-knox.co.uk",
+      "first_name": "",
+      "last_name": "",
+      "email": "Hannah.Arnold@ta-knox.co.uk",
+      "is_staff": true,
+      "is_active": true,
+      "date_joined": "2025-04-29T07:36:43Z",
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 8,
+    "fields": {
+      "password": "pbkdf2_sha256$600000$L0fsIzmU7RCw4oBzRH7tHM$2tERJVYzkVaMYR6FLn8/qxsS2Z6XuqbmRto0g0r3Ols=",
+      "last_login": "2025-06-17T08:26:44.970Z",
+      "is_superuser": false,
+      "username": "rhianna.marsh@ta-knox.co.uk",
+      "first_name": "",
+      "last_name": "",
+      "email": "rhianna.marsh@ta-knox.co.uk",
+      "is_staff": true,
+      "is_active": true,
+      "date_joined": "2025-05-09T13:53:36Z",
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 9,
+    "fields": {
+      "password": "pbkdf2_sha256$600000$NJ6kXniVGSH9XxIUTu8rJs$JkAb6b0P3M5QvzzUrtrVpJQMgiFKCnZlfe3fNfhVrvs=",
+      "last_login": "2025-06-10T08:22:36.869Z",
+      "is_superuser": false,
+      "username": "BenShelley",
+      "first_name": "",
+      "last_name": "",
+      "email": "Ben.Shelley@taknox.co.uk",
+      "is_staff": true,
+      "is_active": true,
+      "date_joined": "2025-05-12T07:19:51Z",
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 10,
+    "fields": {
+      "password": "pbkdf2_sha256$600000$xTfNlrkWTLRvqILN5aUy1F$vJrqnh4UXSoUbPvWcOq1pPdK7SJmqz4nZ09LwEC/7LQ=",
+      "last_login": "2025-05-24T08:37:58.314Z",
+      "is_superuser": true,
+      "username": "Admin",
+      "first_name": "",
+      "last_name": "",
+      "email": "estimating@ta-knox.co.uk",
+      "is_staff": true,
+      "is_active": true,
+      "date_joined": "2025-05-22T08:56:37.921Z",
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 11,
+    "fields": {
+      "password": "pbkdf2_sha256$600000$IBDt7baAalq9auvRlI8Yoc$IwN6CyUtTI+1w7QjquLBADEj459E2D8KqqQM7M4L+B0=",
+      "last_login": "2025-06-02T09:39:40.574Z",
+      "is_superuser": false,
+      "username": "WAnderson",
+      "first_name": "",
+      "last_name": "",
+      "email": "will.anderson@ta-knox.co.uk",
+      "is_staff": true,
+      "is_active": true,
+      "date_joined": "2025-05-28T13:45:07Z",
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 12,
+    "fields": {
+      "password": "pbkdf2_sha256$1000000$HnwIcpXVZN0QijbyKE6o6o$lINCNFODEllNFbTukpXwc/ua12TLnl0sPEFQxlQINkw=",
+      "last_login": null,
+      "is_superuser": true,
+      "username": "TAKnox",
+      "first_name": "",
+      "last_name": "",
+      "email": "estimating@ta-knox.co.uk",
+      "is_staff": true,
+      "is_active": true,
+      "date_joined": "2025-06-23T14:14:45.603Z",
+      "groups": [],
+      "user_permissions": []
+    }
+  }
+]
